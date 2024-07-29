@@ -1,0 +1,10 @@
+^C:\USERS\ZPHRFX\DESKTOP\HDK\VDB_SOLVER\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/zphrfx/Desktop/hdk/VDB_Solver -BC:/Users/zphrfx/Desktop/hdk/VDB_Solver/build --check-stamp-file C:/Users/zphrfx/Desktop/hdk/VDB_Solver/build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
