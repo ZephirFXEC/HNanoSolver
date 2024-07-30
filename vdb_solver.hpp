@@ -3,6 +3,8 @@
 #include <SOP/SOP_Node.h>
 #include <GU/GU_PrimVDB.h>
 
+#include "utils.h"
+
 namespace VdbSolver
 {
     class SOP_VdbSolver : public SOP_Node
@@ -18,20 +20,20 @@ namespace VdbSolver
         // constructor, destructor
         SOP_VdbSolver(OP_Network* net, const char* name, OP_Operator* op);
 
-        virtual ~SOP_VdbSolver();
+        ~SOP_VdbSolver() override;
 
         // labeling node inputs in Houdini UI
-        virtual const char* inputLabel(unsigned idx) const;
+        const char* inputLabel(unsigned idx) const override;
 
         // main function that does geometry processing
-        virtual OP_ERROR cookMySop(OP_Context& context);
+        OP_ERROR cookMySop(OP_Context& context) override;
 
     private:
         // helper function for returning value of parameter
         int DEBUG() { return evalInt("debug", 0, 0); }
 
         // helper function for processing VDB primitives
-        void ProcessFloatVDBGrid(const GU_PrimVDB* vdbPrim);
+        openvdb_houdini::GridPtr ProcessFloatVDBGrid(GU_PrimVDB* vdbPrim, openvdb_houdini::HoudiniInterrupter& boss);
         [[maybe_unused]] void ProcessVecVDBGrid(const GU_PrimVDB* vdbPrim);
     };
 } // namespace VdbSolver

@@ -11,14 +11,11 @@
 #include <openvdb/tools/GridTransformer.h>
 #include <openvdb/tools/Interpolation.h>
 
-#define NANOVDB_USE_OPENVDB
 #include <nanovdb/util/cuda/CudaDeviceBuffer.h>
 #include <GU/GU_PrimVDB.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/CreateNanoGrid.h>
 #include <nanovdb/util/GridHandle.h>
-
-#include "utils.h"
 
 using namespace VdbSolver;
 
@@ -109,9 +106,7 @@ SOP_VdbSolver::SOP_VdbSolver(OP_Network* net,
 {
 }
 
-SOP_VdbSolver::~SOP_VdbSolver()
-{
-}
+SOP_VdbSolver::~SOP_VdbSolver() = default;
 
 OP_ERROR SOP_VdbSolver::cookMySop(OP_Context& context)
 {
@@ -127,45 +122,49 @@ OP_ERROR SOP_VdbSolver::cookMySop(OP_Context& context)
 
     const GU_Detail* geo = inputGeo(0);
 
-    openvdb_houdini::GridPtr outGrid;
-    const GU_PrimVDB* vdb = nullptr;
+    GU_PrimVDB* vdb = nullptr;
 
     // Iterate over the prim to get the first VDB
     for (GA_Iterator it(geo->getPrimitiveRange()); !it.atEnd(); it.advance())
     {
         if (boss.wasInterrupted()) throw std::runtime_error("Boss was Interupted");
 
-        const GEO_Primitive* prim = geo->getGEOPrimitive(it.getOffset());
-        if (dynamic_cast<const GEO_PrimVDB*>(prim))
+        if (auto* prim = const_cast<GEO_Primitive*>(geo->getGEOPrimitive(it.getOffset()));
+            dynamic_cast<GEO_PrimVDB*>(prim))
         {
-            vdb = dynamic_cast<const GU_PrimVDB*>(prim);
+            vdb = dynamic_cast<GU_PrimVDB*>(prim);
             break;
         }
     }
 
+    const openvdb_houdini::GridPtr outGrid = ProcessFloatVDBGrid(vdb, boss);
 
-    ToolOp<openvdb::tools::MeanCurvature> op(true, boss.interrupter(), nullptr);
-    if (openvdb_houdini::GEOvdbApply<openvdb_houdini::NumericGridTypes>(*vdb, op))
-    {
-        outGrid = op.mOutGrid;
-    }
-
-    openvdb_houdini::replaceVdbPrimitive(*gdp, outGrid, *const_cast<GU_PrimVDB*>(vdb), true, "density");
+    openvdb_houdini::replaceVdbPrimitive(*gdp, outGrid, *vdb, true, "density");
 
     return error();
 }
 
-void SOP_VdbSolver::ProcessFloatVDBGrid(const GU_PrimVDB* vdbPrim)
+openvdb_houdini::GridPtr SOP_VdbSolver::ProcessFloatVDBGrid(GU_PrimVDB* vdbPrim,
+                                                            openvdb_houdini::HoudiniInterrupter& boss)
 {
     UT_ASSERT(vdbPrim);
 
-    const auto vdbPtrBase = vdbPrim->getConstGridPtr();
-    const auto vdbPtr = openvdb::gridConstPtrCast<openvdb::FloatGrid>(vdbPtrBase);
+    auto vdbPtrBase = vdbPrim->getGridPtr();
+
+    openvdb_houdini::GridPtr outGrid = nullptr;
+    ToolOp<openvdb::tools::MeanCurvature> op(true, boss.interrupter(), nullptr);
+    if (openvdb_houdini::GEOvdbApply<openvdb_houdini::NumericGridTypes>(vdbPtrBase, op))
+    {
+        outGrid = op.mOutGrid;
+    }
+
+    const auto vdbPtr = openvdb::gridConstPtrCast<openvdb::FloatGrid>(outGrid);
+
 
     if (!vdbPtr)
     {
         addWarning(SOP_MESSAGE, "Skipping non-float VDB grid");
-        return;
+        return nullptr;
     }
 
     // Convert from OpenVDB to NanoVDB, we don't use opentonano because it can't deal with const ptr
@@ -177,7 +176,7 @@ void SOP_VdbSolver::ProcessFloatVDBGrid(const GU_PrimVDB* vdbPrim)
     if (!nanoGrid)
     {
         addError(SOP_MESSAGE, "Failed to convert to NanoVDB Density grid");
-        return;
+        return nullptr;
     }
 
     if (DEBUG())
@@ -185,4 +184,6 @@ void SOP_VdbSolver::ProcessFloatVDBGrid(const GU_PrimVDB* vdbPrim)
         std::cout << nanoGrid->shortGridName() << "\n";
         std::cout << "Density Active Voxel Count : " << nanoGrid->activeVoxelCount() << "\n";
     }
+
+    return outGrid;
 }
