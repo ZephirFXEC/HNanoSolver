@@ -1,43 +1,55 @@
-cmake_minimum_required(VERSION 3.6)
+cmake_minimum_required(VERSION 3.26)
+cmake_policy(SET CMP0091 NEW)
 
-project(HDK_Project)
+set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fp:fast /openmp /arch:AVX2") # MSVC
+
+project(HDK_Project LANGUAGES CXX CUDA)
 
 # CMAKE_PREFIX_PATH must contain the path to the toolkit/cmake subdirectory of
-# the Houdini installation. See the "Compiling with CMake" section of the HDK
-# documentation for more details, which describes several options for
-# specifying this path.
-list(APPEND CMAKE_PREFIX_PATH "$ENV{HFS}/toolkit/cmake")
+# the Houdini installation.
+list(APPEND CMAKE_PREFIX_PATH "$ENV{HFS}/toolkit/cmake" )
 
 # Locate Houdini's libraries and header files.
-# Registers an imported library target named 'Houdini'.
 find_package(Houdini REQUIRED)
+
+# Find CUDA
+find_package(CUDAToolkit REQUIRED)
+enable_language(CUDA)
+if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 75)
+endif ()
+set(CUDA_LINK_LIBRARIES_KEYWORD PUBLIC)
+set(CUDA_SEPARABLE_COMPILATION ON)
+set(CUDA_STANDARD 17)
 
 set(library_name SOP_VdbSolver)
 
-
-# Add a library and its source files.
 add_library(${library_name} SHARED
         vdb_solver.cpp
         vdb_solver.hpp
-        utils.cc
-        utils.h
+        utils.cpp
+        utils.hpp
 )
 
-# Link against the Houdini libraries, and add required include directories and
-# compile definitions.
-target_link_libraries(${library_name} Houdini)
-target_link_libraries(${library_name} "C:/Program Files/Side Effects Software/Houdini 20.5.278/custom/houdini/dsolib/openvdb_sesi.lib")
-target_link_libraries(${library_name} "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/lib/x64/cudart.lib")
+target_compile_definitions(${library_name} PRIVATE
+        "NANOVDB_USE_OPENVDB"
+)
 
-# Include ${CMAKE_CURRENT_BINARY_DIR} for the generated header.
+
+target_link_libraries(${library_name} PRIVATE
+        Houdini
+        CUDA::cudart
+        "C:/Program Files/Side Effects Software/Houdini 20.5.278/custom/houdini/dsolib/openvdb_sesi.lib"
+)
+
 target_include_directories(${library_name} PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}
+        ${CUDAToolkit_INCLUDE_DIRS}
 )
-
-target_include_directories(${library_name} PRIVATE
-        "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include"
-)
-
 
 # Sets several common target properties, such as the library's output directory.
 houdini_configure_target(${library_name})
+
+# target_sources(${library_name} PRIVATE your_cuda_file.cu)

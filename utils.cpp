@@ -5,7 +5,7 @@
 /// @author FX R&D Simulation team
 /// @brief Utility classes and functions for OpenVDB plugins
 
-#include "utils.h"
+#include "utils.hpp"
 
 #include <GEO/GEO_PrimVDB.h>
 #include <GU/GU_Detail.h>
