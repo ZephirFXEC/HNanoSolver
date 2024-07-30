@@ -27,10 +27,20 @@ set(CUDA_STANDARD 17)
 set(library_name SOP_VdbSolver)
 
 add_library(${library_name} SHARED
-        vdb_solver.cpp
-        vdb_solver.hpp
-        utils.cpp
-        utils.hpp
+        SOP_VDBSolver.cpp
+        SOP_VDBSolver.hpp
+        ParmFactory.cpp
+        ParmFactory.hpp
+        SOP_NodeVDB.cpp
+        SOP_NodeVDB.hpp
+        SOP_VDBVerbUtils.hpp
+        Geometry.cpp
+        Geometry.hpp
+        PointUtils.cpp
+        PointUtils.hpp
+        Utils.cpp
+        Utils.hpp
+        AttributeTransferUtil.hpp
 )
 
 target_compile_definitions(${library_name} PRIVATE

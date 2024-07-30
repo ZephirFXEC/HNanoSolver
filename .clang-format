@@ -1,0 +1,10 @@
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++17
+UseTab: ForIndentation
+IndentWidth: 4
+TabWidth: 4
+
+# length of line
+ColumnLimit: 120
+MaxEmptyLinesToKeep: 2

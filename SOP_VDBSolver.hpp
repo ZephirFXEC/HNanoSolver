@@ -1,9 +1,10 @@
 #pragma once
 
-#include <SOP/SOP_Node.h>
 #include <GU/GU_PrimVDB.h>
+#include <SOP/SOP_Node.h>
 
-#include "utils.h"
+#include "Utils.hpp"
+
 
 namespace VdbSolver
 {
@@ -34,6 +35,5 @@ namespace VdbSolver
 
         // helper function for processing VDB primitives
         openvdb_houdini::GridPtr ProcessFloatVDBGrid(GU_PrimVDB* vdbPrim, openvdb_houdini::HoudiniInterrupter& boss);
-        [[maybe_unused]] void ProcessVecVDBGrid(const GU_PrimVDB* vdbPrim);
     };
 } // namespace VdbSolver
