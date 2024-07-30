@@ -157,20 +157,20 @@ namespace openvdb_houdini {
 
 
 	GU_PrimVDB*
-		createVdbPrimitive(GU_Detail& gdp, GridPtr grid, const char* name)
+		createVdbPrimitive(GU_Detail& gdp, const GridPtr& grid, const char* name)
 	{
 		return (!grid ? nullptr : GU_PrimVDB::buildFromGrid(gdp, grid, /*src=*/nullptr, name));
 	}
 
 
 	GU_PrimVDB*
-		replaceVdbPrimitive(GU_Detail& gdp, GridPtr grid, GEO_PrimVDB& src,
+		replaceVdbPrimitive(GU_Detail& gdp, const GridPtr& grid, GEO_PrimVDB& src,
 			const bool copyAttrs, const char* name)
 	{
 		GU_PrimVDB* vdb = nullptr;
 		if (grid) {
 			vdb = GU_PrimVDB::buildFromGrid(gdp, grid, (copyAttrs ? &src : nullptr), name);
-			gdp.destroyPrimitive(src, /*andPoints=*/true);
+			gdp.destroyPrimitive(src, true);
 		}
 		return vdb;
 	}

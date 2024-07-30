@@ -256,7 +256,7 @@ namespace openvdb_houdini {
 	/// @param name       if non-null, set the new primitive's @c name attribute to this string;
 	///                   otherwise, if @a copyAttrs is @c true, copy the name from @a src
 	/// @note This operation clears the input grid's metadata.
-	GU_PrimVDB* replaceVdbPrimitive(GU_Detail& gdp, GridPtr grid, GEO_PrimVDB& src,
+	GU_PrimVDB* replaceVdbPrimitive(GU_Detail& gdp, const GridPtr& grid, GEO_PrimVDB& src,
 		const bool copyAttrs = true, const char* name = nullptr);
 
 
@@ -349,7 +349,7 @@ namespace openvdb_houdini {
 	inline bool
 		GEOvdbApply(const GEO_PrimVDB& vdb, OpT& op)
 	{
-		if (auto gridPtr = vdb.getConstGridPtr()) {
+		if (const auto gridPtr = vdb.getConstGridPtr()) {
 			return gridPtr->apply<GridTypeListT>(op);
 		}
 		return false;
@@ -377,6 +377,29 @@ namespace openvdb_houdini {
 				}
 			}
 			return gridPtr->apply<GridTypeListT>(op);
+		}
+		return false;
+	}
+
+
+	/// @brief If the given  grid resolves to one of the listed grid types,
+	/// invoke the functor @a op on the resolved grid.
+	/// @return @c true if the functor was invoked, @c false otherwise
+	/// @details If @a makeUnique is true, deep copy the grid's tree before
+	/// invoking the functor if the tree is shared with other grids.
+	template <typename GridTypeListT, typename OpT>
+	inline bool
+	GEOvdbApply(openvdb::GridBase::Ptr& vdb, OpT& op, const bool makeUnique = true)
+	{
+		if (makeUnique)
+		{
+			if (const auto treePtr = vdb->baseTreePtr(); treePtr.use_count() > 2)
+			{
+				vdb->apply<GridTypeListT>(
+					[](Grid& baseGrid) { baseGrid.setTree(baseGrid.constBaseTree().copy()); });
+			}
+
+			return vdb->apply<GridTypeListT>(op);
 		}
 		return false;
 	}
