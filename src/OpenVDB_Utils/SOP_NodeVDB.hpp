@@ -10,15 +10,9 @@
 
 #include "ParmFactory.hpp"
 #include <openvdb/openvdb.h>
-#include <openvdb/Platform.h>
 #include <SOP/SOP_Node.h>
-#ifndef SESI_OPENVDB
-#include <UT/UT_DSOVersion.h>
-#endif
 #include <iosfwd>
 #include <string>
-
-#include "ParmFactory.hpp"
 #include "SOP_VDBVerbUtils.hpp"
 
 

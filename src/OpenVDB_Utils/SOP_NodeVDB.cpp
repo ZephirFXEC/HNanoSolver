@@ -17,14 +17,12 @@
 #include <GU/GU_PrimPoly.h>
 #include <OP/OP_NodeInfoParms.h>
 #include <PRM/PRM_Parm.h>
-#include <PRM/PRM_Type.h>
 #include <SOP/SOP_Cache.h> // for stealable
 #include <SYS/SYS_Version.h>
 #include <UT/UT_InfoTree.h>
 #include <UT/UT_SharedPtr.h>
 #include <algorithm>
 #include <cctype> // std::tolower
-#include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>

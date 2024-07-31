@@ -1,20 +1,17 @@
 cmake_minimum_required(VERSION 3.26)
 cmake_policy(SET CMP0091 NEW)
-
 set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fp:fast /openmp /arch:AVX2") # MSVC
 
 project(HDK_Project LANGUAGES CXX CUDA)
 
-# CMAKE_PREFIX_PATH must contain the path to the toolkit/cmake subdirectory of
-# the Houdini installation.
+# ------- Find Houdini -----------
 list(APPEND CMAKE_PREFIX_PATH "$ENV{HFS}/toolkit/cmake" )
-
-# Locate Houdini's libraries and header files.
 find_package(Houdini REQUIRED)
+# ------- End Houdini -----------
 
-# Find CUDA
+
+# ------- Find CUDA -----------
 find_package(CUDAToolkit REQUIRED)
 enable_language(CUDA)
 if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
@@ -23,24 +20,25 @@ endif ()
 set(CUDA_LINK_LIBRARIES_KEYWORD PUBLIC)
 set(CUDA_SEPARABLE_COMPILATION ON)
 set(CUDA_STANDARD 17)
+# ------- End CUDA -----------
 
 set(library_name SOP_VdbSolver)
 
 add_library(${library_name} SHARED
-        SOP_VDBSolver.cpp
-        SOP_VDBSolver.hpp
-        ParmFactory.cpp
-        ParmFactory.hpp
-        SOP_NodeVDB.cpp
-        SOP_NodeVDB.hpp
-        SOP_VDBVerbUtils.hpp
-        Geometry.cpp
-        Geometry.hpp
-        PointUtils.cpp
-        PointUtils.hpp
-        Utils.cpp
-        Utils.hpp
-        AttributeTransferUtil.hpp
+        src/SOP_VDBSolver.cpp
+        src/SOP_VDBSolver.hpp
+        src/OpenVDB_Utils/ParmFactory.cpp
+        src/OpenVDB_Utils/ParmFactory.hpp
+        src/OpenVDB_Utils/SOP_NodeVDB.cpp
+        src/OpenVDB_Utils/SOP_NodeVDB.hpp
+        src/OpenVDB_Utils/SOP_VDBVerbUtils.hpp
+        src/OpenVDB_Utils/Geometry.cpp
+        src/OpenVDB_Utils/Geometry.hpp
+        src/OpenVDB_Utils/PointUtils.cpp
+        src/OpenVDB_Utils/PointUtils.hpp
+        src/OpenVDB_Utils/Utils.cpp
+        src/OpenVDB_Utils/Utils.hpp
+        src/OpenVDB_Utils/AttributeTransferUtil.hpp
 )
 
 target_compile_definitions(${library_name} PRIVATE
