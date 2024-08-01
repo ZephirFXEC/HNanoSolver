@@ -29,10 +29,10 @@ class SOP_VdbSolver final : public SOP_NodeVDB {
 
    private:
 	// helper function for returning value of parameter
-	int DEBUG() { return evalInt("debug", 0, 0); }
+	int DEBUG() const { return evalInt("debug", 0, 0); }
 
 	// helper function for processing VDB primitives
-	GridPtr processGrid(const GridPtr& grid, UT_AutoInterrupt* boss);
+	GridPtr processGrid(const GridPtr& density, const GridPtr& vel, UT_AutoInterrupt* boss);
 };
 
 }  // namespace VdbSolver
