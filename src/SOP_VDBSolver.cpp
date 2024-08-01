@@ -53,55 +53,46 @@ SOP_VdbSolver::~SOP_VdbSolver() = default;
 
 OP_ERROR SOP_VdbSolver::cookVDBSop(OP_Context& context) {
 	try {
-		houdini_utils::ScopedInputLock lock(*this, context);
+		OP_AutoLockInputs inputs(this);
+		if (inputs.lock(context) >= UT_ERROR_ABORT)
+			return error();
 
 		duplicateSource(0, context);
 		duplicateSource(1, context);
 
 		UT_AutoInterrupt boss("Computing VDB grids");
 
-		auto* geo = const_cast<GU_Detail*>(inputGeo(0));
-		auto* vel = const_cast<GU_Detail*>(inputGeo(1));
+		const GU_Detail* geo = inputGeo(0);
+		const GU_Detail* vel = inputGeo(1);
 
-		if (!geo && !vel) return error();
+		if (!geo || !vel) return error();
 
-		GridPtr densGrid = nullptr, velGrid = nullptr;
-		GU_PrimVDB *densvdb = nullptr, *velvdb = nullptr;
+		const GU_PrimVDB* densvdb = nullptr;
+		const GU_PrimVDB* velvdb = nullptr;
+
 		// Get the VDB grids from the input geometry
-		{
-			for (VdbPrimIterator it(geo); it; ++it) {
-				if (boss.wasInterrupted()) break;
-
-				densvdb = *it;
-				if (!densvdb) continue;
-
-				densvdb->makeGridUnique();
-				densGrid = densvdb->getGridPtr();
-			}
-
-			for (VdbPrimIterator it(vel); it; ++it) {
-				if (boss.wasInterrupted()) break;
-
-				velvdb = *it;
-				if (!velvdb) continue;
-
-				velvdb->makeGridUnique();
-				velGrid = velvdb->getGridPtr();
-			}
+		for (VdbPrimCIterator it(geo); it; ++it) {
+			if (boss.wasInterrupted()) break;
+			densvdb = *it;
+			if (densvdb) break;
 		}
 
-		if (!densGrid || !velGrid) {
+		for (VdbPrimCIterator it(vel); it; ++it) {
+			if (boss.wasInterrupted()) break;
+			velvdb = *it;
+			if (velvdb) break;
+		}
+
+		if (!densvdb || !velvdb) {
 			addError(SOP_MESSAGE, "No Valid grids found in the input geometry");
 			return error();
 		}
 
 		// Process the VDB grids
-		{
-			if (const GridPtr outGrid = processGrid(densGrid, velGrid, &boss); outGrid) {
-				replaceVdbPrimitive(*gdp, outGrid, *densvdb, true, "density");
-			}
+		if (const GridPtr outGrid = processGrid(densvdb->getConstGridPtr(), velvdb->getConstGridPtr(), &boss)) {
+			gdp->clearAndDestroy();
+			GU_PrimVDB::buildFromGrid(*gdp, outGrid, densvdb);
 		}
-
 
 	} catch (std::exception& e) {
 		addError(SOP_MESSAGE, e.what());
@@ -110,35 +101,36 @@ OP_ERROR SOP_VdbSolver::cookVDBSop(OP_Context& context) {
 	return error();
 }
 
-GridPtr SOP_VdbSolver::processGrid(const GridPtr& density, const GridPtr& vel, UT_AutoInterrupt* boss) {
+GridPtr SOP_VdbSolver::processGrid(const GridCPtr& density, const GridCPtr& vel, UT_AutoInterrupt* boss) {
 	try {
-		const openvdb::FloatGrid::ConstPtr densityFloatGrid = openvdb::gridConstPtrCast<openvdb::FloatGrid>(density);
-		const openvdb::VectorGrid::ConstPtr velVectorGrid = openvdb::gridConstPtrCast<openvdb::VectorGrid>(vel);
+		const auto densityFloatGrid = openvdb::gridConstPtrCast<openvdb::FloatGrid>(density);
+		const auto velocityGrid = openvdb::gridConstPtrCast<openvdb::VectorGrid>(vel);
 
-		// if grids don't have the same voxel size then return
-		if (densityFloatGrid->voxelSize() != velVectorGrid->voxelSize()) {
-			addError(SOP_MESSAGE, "Velocity grid to match Density grid");
+		if (!densityFloatGrid) {
+			addError(SOP_MESSAGE, "Input density grid is not a FloatGrid");
 			return nullptr;
 		}
 
-		openvdb::tools::VolumeAdvection<openvdb::VectorGrid, true> advection(*velVectorGrid);
-		advection.setIntegrator(openvdb::tools::Scheme::BFECC);
+		openvdb::FloatGrid::Ptr outputGrid = densityFloatGrid->deepCopy();
 
-		const auto advectedGrid =
-		    advection.advect<openvdb::FloatGrid, openvdb::tools::PointSampler>(*densityFloatGrid, 0.1);
+		float dt = 0.1f; // Time step for advection, adjust as needed
+
+		openvdb::tools::foreach(outputGrid->beginValueOn(), [&](const openvdb::FloatGrid::ValueOnIter& iter) {
+			const auto& coord = iter.getCoord();
+			const openvdb::Vec3f velocity = velocityGrid->getConstAccessor().getValue(coord);
+			const openvdb::Vec3f advectedPos = coord.asVec3s() - velocity * dt;
+
+			const float advectedValue = openvdb::tools::BoxSampler::sample(densityFloatGrid->tree(), advectedPos);
+			iter.setValue(advectedValue);
+		});
 
 		if (DEBUG()) {
-			std::cout << "Density: " << std::endl;
-			densityFloatGrid->print();
-
-			std::cout << "Velocity: " << std::endl;
-			velVectorGrid->print();
-
-			std::cout << "Advected: " << std::endl;
-			advectedGrid->print();
+			for (auto iter = outputGrid->beginMeta(); iter != outputGrid->endMeta(); ++iter) {
+				std::cout << iter->first << " = " << iter->second->str() << std::endl;
+			}
 		}
 
-		return advectedGrid;
+		return outputGrid;
 
 	} catch (std::exception& e) {
 		addError(SOP_MESSAGE, e.what());

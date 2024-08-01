@@ -32,7 +32,7 @@ class SOP_VdbSolver final : public SOP_NodeVDB {
 	int DEBUG() const { return evalInt("debug", 0, 0); }
 
 	// helper function for processing VDB primitives
-	GridPtr processGrid(const GridPtr& density, const GridPtr& vel, UT_AutoInterrupt* boss);
+	GridPtr processGrid(const GridCPtr& density, const GridCPtr& vel, UT_AutoInterrupt* boss);
 };
 
 }  // namespace VdbSolver
