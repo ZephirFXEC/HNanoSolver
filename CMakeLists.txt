@@ -49,7 +49,7 @@ target_compile_definitions(${library_name} PRIVATE
 target_link_libraries(${library_name} PRIVATE
         Houdini
         CUDA::cudart
-        "C:/Program Files/Side Effects Software/Houdini 20.5.278/custom/houdini/dsolib/openvdb_sesi.lib"
+        "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
 
 target_include_directories(${library_name} PRIVATE

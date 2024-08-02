@@ -4,7 +4,6 @@
 #include "OpenVDB_Utils/Utils.hpp"
 
 
-
 using namespace openvdb_houdini;
 namespace VdbSolver {
 class SOP_VdbSolver final : public SOP_NodeVDB {
@@ -12,8 +11,12 @@ class SOP_VdbSolver final : public SOP_NodeVDB {
 	// node contructor for HDK
 	static OP_Node* myConstructor(OP_Network*, const char*, OP_Operator*);
 
-	// parameter array for Houdini UI
-	static PRM_Template myTemplateList[];
+
+	class Cache final : public SOP_VDBCacheOptions {
+	   public:
+		OP_ERROR cookVDBSop(OP_Context&) override;
+		GridPtr processGrid(const GridCPtr& density, const GridCPtr& vel, float now);
+	};
 
    protected:
 	// constructor, destructor
@@ -23,16 +26,6 @@ class SOP_VdbSolver final : public SOP_NodeVDB {
 
 	// labeling node inputs in Houdini UI
 	const char* inputLabel(unsigned idx) const override;
-
-	// main function that does geometry processing
-	OP_ERROR cookVDBSop(OP_Context& context) override;
-
-   private:
-	// helper function for returning value of parameter
-	int DEBUG() const { return evalInt("debug", 0, 0); }
-
-	// helper function for processing VDB primitives
-	GridPtr processGrid(const GridCPtr& density, const GridCPtr& vel, UT_AutoInterrupt* boss);
 };
 
 }  // namespace VdbSolver
