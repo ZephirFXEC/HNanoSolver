@@ -80,7 +80,7 @@ getOpHidePolicy()
 
             std::transform(opHidePolicyStr.begin(), opHidePolicyStr.end(),
                 opHidePolicyStr.begin(),
-                [](unsigned char c) { return std::tolower(c); });
+                [](const unsigned char c) { return std::tolower(c); });
 
             sOpHidePolicy = opHidePolicy;
         } else {
@@ -103,8 +103,8 @@ using ApplyGridSpecificInfoTextMap = std::map<openvdb::Name, ApplyGridSpecificIn
 
 struct LockedInfoTextRegistry
 {
-    LockedInfoTextRegistry() {}
-    ~LockedInfoTextRegistry() {}
+    LockedInfoTextRegistry() = default;
+    ~LockedInfoTextRegistry() = default;
 
     std::mutex mMutex;
     ApplyGridSpecificInfoTextMap mApplyGridSpecificInfoTextMap;
@@ -135,12 +135,10 @@ __pragma(warning(default:1711))
 }
 
 
-void registerGridSpecificInfoText(const std::string&, ApplyGridSpecificInfoText);
 ApplyGridSpecificInfoText getGridSpecificInfoText(const std::string&);
 
-
 void
-registerGridSpecificInfoText(const std::string& gridType, ApplyGridSpecificInfoText callback)
+registerGridSpecificInfoText(const std::string& gridType, const ApplyGridSpecificInfoText callback)
 {
     LockedInfoTextRegistry *registry = getInfoTextRegistry();
     std::lock_guard<std::mutex> lock(registry->mMutex);
@@ -298,13 +296,13 @@ SOP_NodeVDB::getNodeSpecificInfoText(OP_Context &context, OP_NodeInfoParms &parm
     // Nothing needed since we will report it as part of native prim info
 #else
     // Get a handle to the geometry.
-    GU_DetailHandle gd_handle = getCookedGeoHandle(context);
+    const GU_DetailHandle gd_handle = getCookedGeoHandle(context);
 
    // Check if we have a valid detail handle.
     if(gd_handle.isNull()) return;
 
     // Lock it for reading.
-    GU_DetailHandleAutoReadLock gd_lock(gd_handle);
+    const GU_DetailHandleAutoReadLock gd_lock(gd_handle);
     // Finally, get at the actual GU_Detail.
     const GU_Detail* tmp_gdp = gd_lock.getGdp();
 
@@ -400,7 +398,7 @@ SOP_NodeVDB::duplicateSourceStealable(const unsigned index,
 
 
 bool
-SOP_NodeVDB::isSourceStealable(const unsigned index, OP_Context& context) const
+SOP_NodeVDB::isSourceStealable(const unsigned index, const OP_Context& context) const
 {
     struct Local {
         static inline OP_Node* nextStealableInput(
@@ -495,15 +493,13 @@ createEmptyGridGlyph(GU_Detail& gdp, GridCRef grid)
     lines[4] = xform.indexToWorld(lines[4]);
     lines[5] = xform.indexToWorld(lines[5]);
 
-    UT_SharedPtr<GU_Detail> tmpGDP(new GU_Detail);
+    const UT_SharedPtr<GU_Detail> tmpGDP(new GU_Detail);
 
     UT_Vector3 color(0.1f, 1.0f, 0.1f);
     tmpGDP->addFloatTuple(GA_ATTRIB_POINT, "Cd", 3, GA_Defaults(color.data(), 3));
 
-    GU_PrimPoly *poly;
-
-    for (int i = 0; i < 6; i += 2) {
-        poly = GU_PrimPoly::build(&*tmpGDP, 2, GU_POLY_OPEN);
+	for (int i = 0; i < 6; i += 2) {
+        const GU_PrimPoly* poly = GU_PrimPoly::build(&*tmpGDP, 2, GU_POLY_OPEN);
 
         tmpGDP->setPos3(poly->getPointOffset(i % 2),
             UT_Vector3(float(lines[i][0]), float(lines[i][1]), float(lines[i][2])));
@@ -523,15 +519,15 @@ SOP_NodeVDB::cookMyGuide1(OP_Context& context)
 {
 #ifndef SESI_OPENVDB
     myGuide1->clearAndDestroy();
-    UT_Vector3 color(0.1f, 0.1f, 1.0f);
+    constexpr UT_Vector3 color(0.1f, 0.1f, 1.0f);
     UT_Vector3 corners[8];
 
     // For each VDB primitive (with a non-null grid pointer) in the group...
-    for (VdbPrimIterator it(gdp); it; ++it) {
-        if (evalGridBBox(it->getGrid(), corners, /*expandHalfVoxel=*/true)) {
+    for (VdbPrimCIterator it(gdp); it; ++it) {
+        if (evalGridBBox(it->getConstGrid(), corners, /*expandHalfVoxel=*/true)) {
             houdini_utils::createBox(*myGuide1, corners, &color);
         } else {
-            createEmptyGridGlyph(*myGuide1, it->getGrid());
+            createEmptyGridGlyph(*myGuide1, it->getConstGrid());
         }
     }
 #endif
@@ -543,48 +539,48 @@ SOP_NodeVDB::cookMyGuide1(OP_Context& context)
 
 
 openvdb::Vec3f
-SOP_NodeVDB::evalVec3f(const char *name, fpreal time) const
+SOP_NodeVDB::evalVec3f(const char *name, const fpreal time) const
 {
-    return openvdb::Vec3f(float(evalFloat(name, 0, time)),
+    return {float(evalFloat(name, 0, time)),
                           float(evalFloat(name, 1, time)),
-                          float(evalFloat(name, 2, time)));
+                          float(evalFloat(name, 2, time))};
 }
 
 openvdb::Vec3R
-SOP_NodeVDB::evalVec3R(const char *name, fpreal time) const
+SOP_NodeVDB::evalVec3R(const char *name, const fpreal time) const
 {
-    return openvdb::Vec3R(evalFloat(name, 0, time),
+    return {evalFloat(name, 0, time),
                           evalFloat(name, 1, time),
-                          evalFloat(name, 2, time));
+                          evalFloat(name, 2, time)};
 }
 
 openvdb::Vec3i
-SOP_NodeVDB::evalVec3i(const char *name, fpreal time) const
+SOP_NodeVDB::evalVec3i(const char *name, const fpreal time) const
 {
     using ValueT = openvdb::Vec3i::value_type;
-    return openvdb::Vec3i(static_cast<ValueT>(evalInt(name, 0, time)),
+    return {static_cast<ValueT>(evalInt(name, 0, time)),
                           static_cast<ValueT>(evalInt(name, 1, time)),
-                          static_cast<ValueT>(evalInt(name, 2, time)));
+                          static_cast<ValueT>(evalInt(name, 2, time))};
 }
 
 openvdb::Vec2R
-SOP_NodeVDB::evalVec2R(const char *name, fpreal time) const
+SOP_NodeVDB::evalVec2R(const char *name, const fpreal time) const
 {
-    return openvdb::Vec2R(evalFloat(name, 0, time),
-                          evalFloat(name, 1, time));
+    return {evalFloat(name, 0, time),
+                          evalFloat(name, 1, time)};
 }
 
 openvdb::Vec2i
-SOP_NodeVDB::evalVec2i(const char *name, fpreal time) const
+SOP_NodeVDB::evalVec2i(const char *name, const fpreal time) const
 {
     using ValueT = openvdb::Vec2i::value_type;
-    return openvdb::Vec2i(static_cast<ValueT>(evalInt(name, 0, time)),
-                          static_cast<ValueT>(evalInt(name, 1, time)));
+    return {static_cast<ValueT>(evalInt(name, 0, time)),
+                          static_cast<ValueT>(evalInt(name, 1, time))};
 }
 
 
 std::string
-SOP_NodeVDB::evalStdString(const char* name, fpreal time, int index) const
+SOP_NodeVDB::evalStdString(const char* name, const fpreal time, const int index) const
 {
     UT_String str;
     evalString(str, name, index, time);
@@ -712,7 +708,7 @@ using OpenVDBOpPolicy = ASWFOpenVDBOpPolicy;
 
 OpenVDBOpFactory::OpenVDBOpFactory(
     const std::string& english,
-    OP_Constructor ctor,
+    const OP_Constructor& ctor,
     houdini_utils::ParmList& parms,
     OP_OperatorTable& table,
     houdini_utils::OpFactory::OpFlavor flavor):

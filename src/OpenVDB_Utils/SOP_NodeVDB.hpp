@@ -27,7 +27,7 @@ class OpenVDBOpFactory: public houdini_utils::OpFactory
 {
 public:
     /// Construct an OpFactory that on destruction registers a new OpenVDB operator type.
-    OpenVDBOpFactory(const std::string& english, OP_Constructor, houdini_utils::ParmList&,
+    OpenVDBOpFactory(const std::string& english, const OP_Constructor&, houdini_utils::ParmList&,
         OP_OperatorTable&, houdini_utils::OpFactory::OpFlavor = SOP);
 
     /// @brief Set the name of the equivalent native operator as shipped with Houdini.
@@ -177,7 +177,7 @@ private:
     /// @param context  the current SOP context is used for cook time for network traversal
     /// @deprecated     verbification renders this redundant
     [[deprecated]]
-    bool isSourceStealable(const unsigned index, OP_Context& context) const;
+    bool isSourceStealable(const unsigned index, const OP_Context& context) const;
 }; // class SOP_NodeVDB
 
 

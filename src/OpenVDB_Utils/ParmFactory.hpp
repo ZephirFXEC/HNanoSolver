@@ -33,6 +33,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 
@@ -394,9 +395,9 @@ public:
     /// (there is no other way to invoke a templated constructor).
     template<typename OpPolicyType>
     OpFactory(const OpPolicyType& /*unused*/, const std::string& english,
-        OP_Constructor ctor, ParmList& parms, OP_OperatorTable& table, OpFlavor flavor = SOP)
+        OP_Constructor ctor, ParmList& parms, OP_OperatorTable& table, const OpFlavor flavor = SOP)
     {
-        this->init(OpPolicyPtr(new OpPolicyType), english, ctor, parms, table, flavor);
+        this->init(OpPolicyPtr(new OpPolicyType), english, std::move(ctor), parms, table, flavor);
     }
 
     /// @note Factories initialized with this constructor use the DWAOpPolicy.
@@ -568,9 +569,9 @@ public:
             throw std::runtime_error("failed to lock inputs");
         }
     }
-    ~ScopedInputLock() {}
+    ~ScopedInputLock() = default;
 
-    void markInputUnlocked(exint input) { mLock.markInputUnlocked(input); }
+    void markInputUnlocked(const exint input) { mLock.markInputUnlocked(input); }
 
 private:
     OP_AutoLockInputs mLock;

@@ -11,6 +11,8 @@
 #include <GU/GU_Detail.h>
 #include <UT/UT_String.h>
 #include <UT/UT_Version.h>
+
+#include <utility>
 #ifdef OPENVDB_USE_LOG4CPLUS
 #include <CHOP/CHOP_Error.h>  // for CHOP_ERROR_MESSAGE
 #include <DOP/DOP_Error.h>    // for DOP_MESSAGE
@@ -29,8 +31,8 @@
 
 namespace openvdb_houdini {
 
-VdbPrimCIterator::VdbPrimCIterator(const GEO_Detail* gdp, const GA_PrimitiveGroup* group, FilterFunc filter)
-    : mIter(gdp ? new GA_GBPrimitiveIterator(*gdp, group) : nullptr), mFilter(filter) {
+VdbPrimCIterator::VdbPrimCIterator(const GEO_Detail* gdp, const GA_PrimitiveGroup* group, FilterFunc  filter)
+    : mIter(gdp ? new GA_GBPrimitiveIterator(*gdp, group) : nullptr), mFilter(std::move(filter)) {
 	// Ensure that, after construction, this iterator points to
 	// a valid VDB primitive (if there is one).
 	if (nullptr == getPrimitive()) advance();
@@ -39,7 +41,7 @@ VdbPrimCIterator::VdbPrimCIterator(const GEO_Detail* gdp, const GA_PrimitiveGrou
 
 VdbPrimCIterator::VdbPrimCIterator(const GEO_Detail* gdp, GA_Range::safedeletions, const GA_PrimitiveGroup* group,
                                    FilterFunc filter)
-    : mIter(gdp ? new GA_GBPrimitiveIterator(*gdp, group, GA_Range::safedeletions()) : nullptr), mFilter(filter) {
+    : mIter(gdp ? new GA_GBPrimitiveIterator(*gdp, group, GA_Range::safedeletions()) : nullptr), mFilter(std::move(filter)) {
 	// Ensure that, after construction, this iterator points to
 	// a valid VDB primitive (if there is one).
 	if (nullptr == getPrimitive()) advance();
@@ -59,7 +61,7 @@ VdbPrimCIterator& VdbPrimCIterator::operator=(const VdbPrimCIterator& other) {
 }
 
 
-void VdbPrimCIterator::advance() {
+void VdbPrimCIterator::advance() const {
 	if (mIter) {
 		GA_GBPrimitiveIterator& iter = *mIter;
 		for (++iter; iter.getPrimitive() != nullptr && getPrimitive() == nullptr; ++iter) {
@@ -73,7 +75,7 @@ const GU_PrimVDB* VdbPrimCIterator::getPrimitive() const {
 		if (GA_Primitive* prim = mIter->getPrimitive()) {
 			const GA_PrimitiveTypeId primVdbTypeId = GA_PRIMVDB;
 			if (prim->getTypeId() == primVdbTypeId) {
-				GU_PrimVDB* vdb = UTverify_cast<GU_PrimVDB*>(prim);
+				const auto* vdb = UTverify_cast<GU_PrimVDB*>(prim);
 				if (mFilter && !mFilter(*vdb)) return nullptr;
 				return vdb;
 			}
@@ -103,7 +105,7 @@ UT_String VdbPrimCIterator::getPrimitiveNameOrIndex() const {
 }
 
 
-UT_String VdbPrimCIterator::getPrimitiveIndexAndName(bool keepEmptyName) const {
+UT_String VdbPrimCIterator::getPrimitiveIndexAndName(const bool keepEmptyName) const {
 	// We must have ALWAYS_DEEP enabled on returned UT_String objects to avoid
 	// having it deleted before the caller has a chance to use it.
 	UT_String result(UT_String::ALWAYS_DEEP);
@@ -153,7 +155,7 @@ GU_PrimVDB* replaceVdbPrimitive(GU_Detail& gdp, const GridPtr& grid, GEO_PrimVDB
 ////////////////////////////////////////
 
 
-bool evalGridBBox(GridCRef grid, UT_Vector3 corners[8], bool expandHalfVoxel) {
+bool evalGridBBox(GridCRef grid, UT_Vector3 corners[8], const bool expandHalfVoxel) {
 	if (grid.activeVoxelCount() == 0) return false;
 
 	openvdb::CoordBBox activeBBox = grid.evalActiveVoxelBoundingBox();

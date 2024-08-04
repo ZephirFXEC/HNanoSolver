@@ -22,41 +22,41 @@
 class SOP_VDBCacheOptions: public SOP_NodeCacheOptions
 {
 public:
-            SOP_VDBCacheOptions() {}
-            ~SOP_VDBCacheOptions() override {}
+            SOP_VDBCacheOptions() = default;
+            ~SOP_VDBCacheOptions() override = default;
 
-    openvdb::Vec3f evalVec3f(const char* name, fpreal time) const
+    openvdb::Vec3f evalVec3f(const char* name, const fpreal time) const
     {
-        return openvdb::Vec3f(static_cast<float>(evalFloat(name, 0, time)),
+        return {static_cast<float>(evalFloat(name, 0, time)),
                               static_cast<float>(evalFloat(name, 1, time)),
-                              static_cast<float>(evalFloat(name, 2, time)));
+                              static_cast<float>(evalFloat(name, 2, time))};
     }
-    openvdb::Vec3R evalVec3R(const char* name, fpreal time) const
+    openvdb::Vec3R evalVec3R(const char* name, const fpreal time) const
     {
-        return openvdb::Vec3R(evalFloat(name, 0, time),
+        return {evalFloat(name, 0, time),
                               evalFloat(name, 1, time),
-                              evalFloat(name, 2, time));
+                              evalFloat(name, 2, time)};
     }
-    openvdb::Vec3i evalVec3i(const char* name, fpreal time) const
+    openvdb::Vec3i evalVec3i(const char* name, const fpreal time) const
     {
         using IntT = openvdb::Vec3i::ValueType;
-        return openvdb::Vec3i(static_cast<IntT>(evalInt(name, 0, time)),
+        return {static_cast<IntT>(evalInt(name, 0, time)),
                               static_cast<IntT>(evalInt(name, 1, time)),
-                              static_cast<IntT>(evalInt(name, 2, time)));
+                              static_cast<IntT>(evalInt(name, 2, time))};
     }
-    openvdb::Vec2R evalVec2R(const char* name, fpreal time) const
+    openvdb::Vec2R evalVec2R(const char* name, const fpreal time) const
     {
-        return openvdb::Vec2R(evalFloat(name, 0, time),
-                              evalFloat(name, 1, time));
+        return {evalFloat(name, 0, time),
+                              evalFloat(name, 1, time)};
     }
-    openvdb::Vec2i evalVec2i(const char* name, fpreal time) const
+    openvdb::Vec2i evalVec2i(const char* name, const fpreal time) const
     {
         using IntT = openvdb::Vec2i::ValueType;
-        return openvdb::Vec2i(static_cast<IntT>(evalInt(name, 0, time)),
-                              static_cast<IntT>(evalInt(name, 1, time)));
+        return {static_cast<IntT>(evalInt(name, 0, time)),
+                              static_cast<IntT>(evalInt(name, 1, time))};
     }
 
-    std::string evalStdString(const char* name, fpreal time, int index = 0) const
+    std::string evalStdString(const char* name, const fpreal time, const int index = 0) const
     {
         UT_String str;
         evalString(str, name, index, time);
@@ -65,7 +65,7 @@ public:
 
     const GA_PrimitiveGroup *matchGroup(const GU_Detail &gdp, const UT_StringRef &groupname)
     {
-        const GA_PrimitiveGroup *group = 0;
+        const GA_PrimitiveGroup *group = nullptr;
         if (groupname.isstring())
         {
             bool success = false;
@@ -109,7 +109,7 @@ public:
 protected:
     OP_ERROR cook(OP_Context &context) override final
     {
-        auto result = cookMySop(context);
+        const auto result = cookMySop(context);
         gop.destroyAdhocGroups();
         return result;
     }

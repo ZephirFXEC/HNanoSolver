@@ -20,7 +20,7 @@
 
 
 #ifdef SESI_OPENVDB
-#ifdef
+#ifdef TEST
 #undef
 #define
 #endif
@@ -66,7 +66,7 @@ class VdbPrimCIterator {
 
 	//@{
 	/// Advance to the next VDB primitive.
-	void advance();
+	void advance() const;
 	VdbPrimCIterator& operator++() {
 		advance();
 		return *this;
@@ -75,28 +75,28 @@ class VdbPrimCIterator {
 
 	//@{
 	/// Return a pointer to the current VDB primitive (@c nullptr if at end).
-	const GU_PrimVDB* getPrimitive() const;
+	[[nodiscard]] const GU_PrimVDB* getPrimitive() const;
 	const GU_PrimVDB* operator*() const { return getPrimitive(); }
 	const GU_PrimVDB* operator->() const { return getPrimitive(); }
 	//@}
 
 	//@{
-	GA_Offset getOffset() const { return getPrimitive()->getMapOffset(); }
-	GA_Index getIndex() const { return getPrimitive()->getMapIndex(); }
+	[[nodiscard]] GA_Offset getOffset() const { return getPrimitive()->getMapOffset(); }
+	[[nodiscard]] GA_Index getIndex() const { return getPrimitive()->getMapIndex(); }
 	//@}
 
 	/// Return @c false if there are no more VDB primitives.
-	operator bool() const { return getPrimitive() != nullptr; }
+	explicit operator bool() const { return getPrimitive() != nullptr; }
 
 	/// @brief Return the value of the current VDB primitive's @c name attribute.
 	/// @param defaultName
 	///     if the current primitive has no @c name attribute
 	///     or its name is empty, return this name instead
-	UT_String getPrimitiveName(const UT_String& defaultName = "") const;
+	[[nodiscard]] UT_String getPrimitiveName(const UT_String& defaultName = "") const;
 
 	/// @brief Return the value of the current VDB primitive's @c name attribute
 	/// or, if the name is empty, the primitive's index (as a UT_String).
-	UT_String getPrimitiveNameOrIndex() const;
+	[[nodiscard]] UT_String getPrimitiveNameOrIndex() const;
 
 	/// @brief Return a string of the form "N (NAME)", where @e N is
 	/// the current VDB primitive's index and @e NAME is the value
@@ -104,7 +104,7 @@ class VdbPrimCIterator {
 	/// @param keepEmptyName  if the current primitive has no @c name attribute
 	///     or its name is empty, then if this flag is @c true, return a string
 	///     "N ()", otherwise return a string "N" omitting the empty name
-	UT_String getPrimitiveIndexAndName(bool keepEmptyName = true) const;
+	[[nodiscard]] UT_String getPrimitiveIndexAndName(bool keepEmptyName = true) const;
 
    protected:
 	/// Allow primitives to be deleted during iteration.
@@ -133,8 +133,8 @@ class VdbPrimIterator : public VdbPrimCIterator {
 	///     an optional function or functor that takes a @c const reference
 	///     to a GU_PrimVDB and returns a boolean specifying whether
 	///     that primitive should be visited (@c true) or not (@c false)
-	explicit VdbPrimIterator(GEO_Detail* gdp, const GA_PrimitiveGroup* group = nullptr,
-	                         FilterFunc filter = FilterFunc())
+	explicit VdbPrimIterator(const GEO_Detail* gdp, const GA_PrimitiveGroup* group = nullptr,
+	                         const FilterFunc& filter = FilterFunc())
 	    : VdbPrimCIterator(gdp, group, filter) {}
 	/// @brief Allow primitives to be deleted during iteration.
 	/// @param gdp
@@ -146,8 +146,8 @@ class VdbPrimIterator : public VdbPrimCIterator {
 	///     an optional function or functor that takes a @c const reference
 	///     to a GU_PrimVDB and returns a boolean specifying whether
 	///     that primitive should be visited (@c true) or not (@c false)
-	VdbPrimIterator(GEO_Detail* gdp, GA_Range::safedeletions, const GA_PrimitiveGroup* group = nullptr,
-	                FilterFunc filter = FilterFunc())
+	VdbPrimIterator(const GEO_Detail* gdp, GA_Range::safedeletions, const GA_PrimitiveGroup* group = nullptr,
+	                const FilterFunc& filter = FilterFunc())
 	    : VdbPrimCIterator(gdp, GA_Range::safedeletions(), group, filter) {}
 
 	VdbPrimIterator(const VdbPrimIterator&);
@@ -161,7 +161,7 @@ class VdbPrimIterator : public VdbPrimCIterator {
 
 	//@{
 	/// Return a pointer to the current VDB primitive (@c nullptr if at end).
-	GU_PrimVDB* getPrimitive() const { return const_cast<GU_PrimVDB*>(VdbPrimCIterator::getPrimitive()); }
+	[[nodiscard]] GU_PrimVDB* getPrimitive() const { return const_cast<GU_PrimVDB*>(VdbPrimCIterator::getPrimitive()); }
 	GU_PrimVDB* operator*() const { return getPrimitive(); }
 	GU_PrimVDB* operator->() const { return getPrimitive(); }
 	//@}
@@ -178,7 +178,7 @@ class HoudiniInterrupter final : public openvdb::util::NullInterrupter {
    public:
 	explicit HoudiniInterrupter(const char* title = nullptr)
 	    : mUTI{UTgetInterrupt()}, mRunning{false}, mTitle{title ? title : ""} {}
-	~HoudiniInterrupter() override final {
+	~HoudiniInterrupter() override {
 		if (mRunning) this->end();
 	}
 
@@ -187,14 +187,14 @@ class HoudiniInterrupter final : public openvdb::util::NullInterrupter {
 
 	/// @brief Signal the start of an interruptible operation.
 	/// @param name  an optional descriptive name for the operation
-	void start(const char* name = nullptr) override final {
+	void start(const char* name = nullptr) override {
 		if (!mRunning) {
 			mRunning = true;
 			mUTI->opStart(name ? name : mTitle.c_str());
 		}
 	}
 	/// Signal the end of an interruptible operation.
-	void end() override final {
+	void end() override {
 		if (mRunning) {
 			mUTI->opEnd();
 			mRunning = false;
@@ -204,7 +204,7 @@ class HoudiniInterrupter final : public openvdb::util::NullInterrupter {
 	/// @brief Check if an interruptible operation should be aborted.
 	/// @param percent  an optional (when >= 0) percentage indicating
 	///     the fraction of the operation that has been completed
-	bool wasInterrupted(int percent = -1) override final { return mUTI->opInterrupt(percent); }
+	bool wasInterrupted(int percent = -1) override { return mUTI->opInterrupt(percent); }
 
    private:
 	UT_Interrupt* mUTI;

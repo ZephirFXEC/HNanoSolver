@@ -171,13 +171,6 @@ GridPtr SOP_VdbSolver::Cache::processGrid(const GridCPtr& density, const GridCPt
 		outputGrid = advection.advect<openvdb::FloatGrid, openvdb::tools::BoxSampler>(*densityFloatGrid,
 		                                                                              evalFloat("timestep", 0, now));
 
-
-		if (evalInt("debug", 0, now)) {
-			for (auto iter = outputGrid->beginMeta(); iter != outputGrid->endMeta(); ++iter) {
-				std::cout << iter->first << " = " << iter->second->str() << std::endl;
-			}
-		}
-
 		return outputGrid;
 
 	} catch (std::exception& e) {
