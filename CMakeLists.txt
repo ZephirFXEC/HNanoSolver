@@ -4,6 +4,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CUDA_STANDARD 17)
 
 project(HNanoSolver LANGUAGES CXX CUDA)
+add_compile_definitions(SESI_OPENVDB)
 
 # ------- Find Houdini -----------
 list(APPEND CMAKE_PREFIX_PATH "$ENV{HFS}/toolkit/cmake" )

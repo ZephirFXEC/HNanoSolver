@@ -1,7 +1,4 @@
 #pragma once
-
-#define SESI_OPENVDB
-
 #include "OpenVDB_Utils/SOP_NodeVDB.hpp"
 #include "OpenVDB_Utils/Utils.hpp"
 
@@ -15,12 +12,16 @@ class SOP_VdbSolver final : public SOP_NodeVDB {
 	static OP_Node* myConstructor(OP_Network*, const char*, OP_Operator*);
 
 	class Cache final : public SOP_VDBCacheOptions {
-	   public:
+	public:
 		OP_ERROR cookVDBSop(OP_Context&) override;
-		GridPtr processGrid(const GridCPtr& density, const GridCPtr& vel, float now);
 
-		template<typename Grid>
-		GridPtr Advect(Grid& quantity, const openvdb::VectorGrid& velocity, float now);
+		template<typename GridType>
+		typename GridType::ConstPtr processGrid(const GridCPtr& in);
+
+
+		// GridType is either openvdb::FloatGrid or openvdb::VectorGrid
+		template<typename GridType>
+		typename GridType::Ptr advect(const std::shared_ptr<GridType>& grid, const std::shared_ptr<openvdb::VectorGrid>& velocity, const double dt);
 	};
 
    protected:

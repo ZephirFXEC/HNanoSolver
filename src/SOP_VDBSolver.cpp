@@ -3,17 +3,14 @@
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimVDB.h>
 #include <UT/UT_DSOVersion.h>
-#include <UT/UT_Interrupt.h>
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/CreateNanoGrid.h>
-#include <nanovdb/util/GridBuilder.h>
+#include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/tools/GridBuilder.h>
 #include <openvdb/tools/GridOperators.h>
 #include <openvdb/tools/GridTransformer.h>
 #include <openvdb/tools/VolumeAdvect.h>
 
 using namespace VdbSolver;
-
-static PRM_Name debugPRM("debug", "Print debug information");
 
 void newSopOperator(OP_OperatorTable* table) {
 	if (table == nullptr) return;
@@ -73,6 +70,7 @@ const char* SOP_VdbSolver::inputLabel(const unsigned idx) const {
 
 OP_Node* SOP_VdbSolver::myConstructor(OP_Network* net, const char* name, OP_Operator* op) {
 	return new SOP_VdbSolver(net, name, op);
+
 }
 
 SOP_VdbSolver::SOP_VdbSolver(OP_Network* net, const char* name, OP_Operator* op) : SOP_NodeVDB(net, name, op) {}
@@ -91,43 +89,49 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 			return error();
 		}
 
-		const GU_PrimVDB* densvdb = nullptr;
-		const GU_PrimVDB* velvdb = nullptr;
+		std::shared_ptr<openvdb::FloatGrid> densGrid;
+		std::shared_ptr<openvdb::VectorGrid> velGrid;
 
 		// Get the VDB grids from the input geometry
-		for (VdbPrimCIterator it(gdp, matchGroup(*gdp, evalStdString("group", now))); it; ++it) {
+		for (VdbPrimIterator it(gdp, matchGroup(*gdp, evalStdString("group", now))); it; ++it) {
 			if (boss.wasInterrupted()) break;
-			densvdb = *it;
-			if (densvdb) break;
+			densGrid = openvdb::gridPtrCast<openvdb::FloatGrid>((*it)->getGridPtr());
+			if (densGrid) break;
 		}
 
-		for (VdbPrimCIterator it(velgeo, matchGroup(*velgeo, evalStdString("velgroup", now))); it; ++it) {
+		for (VdbPrimIterator it(velgeo, matchGroup(*velgeo, evalStdString("velgroup", now))); it; ++it) {
 			if (boss.wasInterrupted()) break;
-			velvdb = *it;
-			if (velvdb) break;
+			velGrid = openvdb::gridPtrCast<openvdb::VectorGrid>((*it)->getGridPtr());
+			if (velGrid) break;
 		}
 
-		if (!densvdb || !velvdb) {
+		if (!densGrid || !velGrid) {
 			addError(SOP_MESSAGE, "No Valid grids found in the input geometry");
+			return error();
 		}
 
-		if (evalInt("debug", 0, now)) {
-			for (auto iter = densvdb->getMetadata().beginMeta(); iter != densvdb->getMetadata().endMeta(); ++iter) {
-				std::cout << iter->first << " = " << iter->second->str() << std::endl;
-			}
+		// Process grids:
+		const double dt = evalFloat("timestep", 0, now);
 
-			for (auto iter	 = velvdb->getMetadata().beginMeta(); iter != velvdb->getMetadata().endMeta(); ++iter) {
-				std::cout << iter->first << " = " << iter->second->str() << std::endl;
-			}
+		// Advect velocity
+		const auto advectedVel = advect(velGrid, velGrid, dt);
+		if (!advectedVel) {
+			addError(SOP_MESSAGE, "Failed to advect velocity grid");
+			return error();
 		}
 
-		// Process the VDB grids
-		if (const GridPtr outGrid = processGrid(densvdb->getConstGridPtr(), velvdb->getConstGridPtr(), now)) {
-			gdp->clearAndDestroy();
-			GU_PrimVDB::buildFromGrid(*gdp, outGrid, densvdb);
-		} else {
-			addError(SOP_MESSAGE, "Failed to process grids");
+		// Advect density using the advected velocity
+		const auto advectedDens = advect(densGrid, advectedVel, dt);
+		if (!advectedDens) {
+			addError(SOP_MESSAGE, "Failed to advect density grid");
+			return error();
 		}
+
+		gdp->clearAndDestroy();
+
+		// Create new VDB primitives from the advected grids
+		GU_PrimVDB::buildFromGrid(*gdp, advectedDens, nullptr, "density");
+		GU_PrimVDB::buildFromGrid(*gdp, advectedVel, nullptr, "vel");
 
 		boss.end();
 
@@ -139,43 +143,36 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 	return error();
 }
 
-GridPtr SOP_VdbSolver::Cache::processGrid(const GridCPtr& density, const GridCPtr& vel, const float now) {
-	try {
-		const auto densityFloatGrid = openvdb::gridConstPtrCast<openvdb::FloatGrid>(density);
-		const auto velocityGrid = openvdb::gridConstPtrCast<openvdb::VectorGrid>(vel);
 
-		if (!densityFloatGrid) {
-			addError(SOP_MESSAGE, "Input density grid is not a FloatGrid");
+template<typename GridType>
+typename GridType::ConstPtr SOP_VdbSolver::Cache::processGrid(const GridCPtr& in) {
+	try {
+		typename GridType::ConstPtr transformed = openvdb::gridConstPtrCast<GridType>(in);
+
+		if (!transformed) {
+			addError(SOP_MESSAGE, "Input grid is not of the expected type");
 			return nullptr;
 		}
 
-		openvdb::FloatGrid::Ptr outputGrid = densityFloatGrid->deepCopy();
-
-		/*
-		constexpr float dt = 0.1f; // Time step for advection, adjust as needed
-
-		openvdb::tools::foreach(outputGrid->beginValueOn(), [&](const openvdb::FloatGrid::ValueOnIter& iter) {
-		    const auto& coord = iter.getCoord();
-		    const openvdb::Vec3f velocity = velocityGrid->getConstAccessor().getValue(coord);
-		    const openvdb::Vec3f advectedPos = coord.asVec3s() - velocity * dt;
-
-		    const float advectedValue = openvdb::tools::BoxSampler::sample(densityFloatGrid->constTree(), advectedPos);
-		    iter.setValue(advectedValue);
-		});
-
-		*/// ------------
-
-		openvdb::tools::VolumeAdvection<openvdb::VectorGrid, true> advection(*velocityGrid);
-		advection.setIntegrator(openvdb::tools::Scheme::SEMI);
-
-		outputGrid = advection.advect<openvdb::FloatGrid, openvdb::tools::BoxSampler>(*densityFloatGrid,
-		                                                                              evalFloat("timestep", 0, now));
-
-		return outputGrid;
+		return transformed;
 
 	} catch (std::exception& e) {
 		addError(SOP_MESSAGE, e.what());
+		return nullptr;
 	}
+}
 
-	return nullptr;
+template<typename GridType>
+typename GridType::Ptr SOP_VdbSolver::Cache::advect(const std::shared_ptr<GridType>& grid, const std::shared_ptr<openvdb::VectorGrid>& velocity, const double dt) {
+	HoudiniInterrupter boss("Advecting grid...");
+	boss.start();
+
+	openvdb::tools::VolumeAdvection<openvdb::VectorGrid> advectOp(*velocity);
+
+	// Use BoxSampler explicitly
+	auto result = advectOp.advect<GridType, openvdb::tools::BoxSampler>(*grid, dt);
+
+	boss.end();
+
+	return result;
 }
