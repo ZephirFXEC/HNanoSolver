@@ -2,18 +2,19 @@
 // SPDX-License-Identifier: MPL-2.0
 
 #include <nanovdb/NanoVDB.h> // this defined the core tree data structure of NanoVDB accessable on both the host and device
-#include <stdio.h> // for printf
+#include <nanovdb/util/cuda/CudaGridHandle.cuh> // required since GridHandle<DeviceBuffer> has device code
+#include <cstdio> // for printf
 
 // This is called by the host only
 void cpu_kernel(const nanovdb::NanoGrid<float>* cpuGrid)
 {
-	printf("NanoVDB cpu; %4.2f\n", cpuGrid->tree().getValue(nanovdb::Coord(99, 0, 0)));
+	printf("NanoVDB cpu; %4.2f\n", cpuGrid->tree().getValue(nanovdb::Coord(4, 5, 6)));
 }
 
 // This is called by the device only
 __global__ void gpu_kernel(const nanovdb::NanoGrid<float>* deviceGrid)
 {
-	printf("NanoVDB gpu: %4.2f\n", deviceGrid->tree().getValue(nanovdb::Coord(99, 0, 0)));
+	printf("NanoVDB gpu: %4.2f\n", deviceGrid->tree().getValue(nanovdb::Coord(4, 5, 6)));
 }
 
 // This is called by the client code on the host

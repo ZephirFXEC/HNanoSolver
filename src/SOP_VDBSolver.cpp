@@ -1,14 +1,17 @@
 #include "SOP_VDBSolver.hpp"
 
-#include <GU/GU_Detail.h>
-#include <GU/GU_PrimVDB.h>
-#include <UT/UT_DSOVersion.h>
-#include <nanovdb/NanoVDB.h>
-#include <nanovdb/tools/CreateNanoGrid.h>
-#include <nanovdb/tools/GridBuilder.h>
+#include <openvdb/openvdb.h>
 #include <openvdb/tools/GridOperators.h>
 #include <openvdb/tools/GridTransformer.h>
 #include <openvdb/tools/VolumeAdvect.h>
+
+#include <nanovdb/NanoVDB.h>
+#include <nanovdb/util/CreateNanoGrid.h>
+#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
+
+#include <GU/GU_Detail.h>
+#include <GU/GU_PrimVDB.h>
+#include <UT/UT_DSOVersion.h>
 
 using namespace VdbSolver;
 
@@ -89,19 +92,23 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 			return error();
 		}
 
-		std::shared_ptr<openvdb::FloatGrid> densGrid;
-		std::shared_ptr<openvdb::VectorGrid> velGrid;
+		openvdb::FloatGrid::ConstPtr densGrid;
+		openvdb::VectorGrid::ConstPtr velGrid;
+		openvdb::FloatGrid::Ptr testNano;
 
 		// Get the VDB grids from the input geometry
 		for (VdbPrimIterator it(gdp, matchGroup(*gdp, evalStdString("group", now))); it; ++it) {
 			if (boss.wasInterrupted()) break;
-			densGrid = openvdb::gridPtrCast<openvdb::FloatGrid>((*it)->getGridPtr());
+			densGrid = openvdb::gridConstPtrCast<openvdb::FloatGrid>((*it)->getConstGridPtr());
+
+			//test
+			testNano = openvdb::gridPtrCast<openvdb::FloatGrid>((*it)->getGridPtr());
 			if (densGrid) break;
 		}
 
-		for (VdbPrimIterator it(velgeo, matchGroup(*velgeo, evalStdString("velgroup", now))); it; ++it) {
+		for (VdbPrimCIterator it(velgeo, matchGroup(*velgeo, evalStdString("velgroup", now))); it; ++it) {
 			if (boss.wasInterrupted()) break;
-			velGrid = openvdb::gridPtrCast<openvdb::VectorGrid>((*it)->getGridPtr());
+			velGrid = openvdb::gridConstPtrCast<openvdb::VectorGrid>((*it)->getConstGridPtr());
 			if (velGrid) break;
 		}
 
@@ -113,25 +120,19 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 		// Process grids:
 		const double dt = evalFloat("timestep", 0, now);
 
-		// Advect velocity
-		const auto advectedVel = advect(velGrid, velGrid, dt);
-		if (!advectedVel) {
-			addError(SOP_MESSAGE, "Failed to advect velocity grid");
-			return error();
-		}
-
 		// Advect density using the advected velocity
-		const auto advectedDens = advect(densGrid, advectedVel, dt);
+		const auto advectedDens = advect(densGrid, velGrid, dt);
 		if (!advectedDens) {
 			addError(SOP_MESSAGE, "Failed to advect density grid");
 			return error();
 		}
 
+		auto handle = nanovdb::createNanoGrid<openvdb::FloatGrid, float, nanovdb::CudaDeviceBuffer>(*testNano);
+
 		gdp->clearAndDestroy();
 
 		// Create new VDB primitives from the advected grids
 		GU_PrimVDB::buildFromGrid(*gdp, advectedDens, nullptr, "density");
-		GU_PrimVDB::buildFromGrid(*gdp, advectedVel, nullptr, "vel");
 
 		boss.end();
 
@@ -142,6 +143,9 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 
 	return error();
 }
+
+
+
 
 
 template<typename GridType>
@@ -163,7 +167,7 @@ typename GridType::ConstPtr SOP_VdbSolver::Cache::processGrid(const GridCPtr& in
 }
 
 template<typename GridType>
-typename GridType::Ptr SOP_VdbSolver::Cache::advect(const std::shared_ptr<GridType>& grid, const std::shared_ptr<openvdb::VectorGrid>& velocity, const double dt) {
+typename GridType::Ptr SOP_VdbSolver::Cache::advect(const std::shared_ptr<const GridType>& grid, const std::shared_ptr<const openvdb::VectorGrid>& velocity, const double dt) {
 	HoudiniInterrupter boss("Advecting grid...");
 	boss.start();
 

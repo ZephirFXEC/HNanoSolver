@@ -21,7 +21,7 @@ class SOP_VdbSolver final : public SOP_NodeVDB {
 
 		// GridType is either openvdb::FloatGrid or openvdb::VectorGrid
 		template<typename GridType>
-		typename GridType::Ptr advect(const std::shared_ptr<GridType>& grid, const std::shared_ptr<openvdb::VectorGrid>& velocity, const double dt);
+		typename GridType::Ptr advect(const std::shared_ptr<const GridType>& grid, const std::shared_ptr<const openvdb::VectorGrid>& velocity, const double dt);
 	};
 
    protected:
