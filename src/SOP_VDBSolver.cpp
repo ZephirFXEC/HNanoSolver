@@ -92,7 +92,7 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 
 		HoudiniInterrupter boss("Computing VDB grids");
 
-		const GU_Detail* velgeo = inputGeo(1);
+		const GU_Detail* velgeo = inputGeo(1, context);
 		if (!velgeo) {
 			addError(SOP_MESSAGE, "No velocity input geometry found");
 			return error();
@@ -136,29 +136,18 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 
 			// Reuse the same CUDA stream for all operations
 			cudaStream_t stream;
-			cudaError_t cudaStatus = cudaStreamCreate(&stream);
-			if (cudaStatus != cudaSuccess) {
-				addError(SOP_MESSAGE, "Failed to create CUDA stream");
-				return error();
-			}
+			cudaStreamCreate(&stream);
 
 			// Asynchronous upload of grids to GPU
 			handle.deviceUpload(stream, false);
 			velHandle.deviceUpload(stream, false);
 
-			// Wait for uploads to complete before launching kernels
-			cudaStatus = cudaStreamSynchronize(stream);
-			if (cudaStatus != cudaSuccess) {
-				addError(SOP_MESSAGE, "CUDA stream synchronization failed");
-				return error();
-			}
-
 			// Obtain device grid pointers
-			nanovdb::FloatGrid* gpuHandle = handle.deviceGrid<float>();
-			const nanovdb::Vec3fGrid* velGpuHandle = velHandle.deviceGrid<nanovdb::Vec3f>();
+			nanovdb::FloatGrid* gpuDenHandle = handle.deviceGrid<float>();
+			const nanovdb::Vec3fGrid* GpuVelHandle = velHandle.deviceGrid<nanovdb::Vec3f>();
 
 			// Validate grid pointers
-			if (!gpuHandle || !velGpuHandle) {
+			if (!gpuDenHandle || !GpuVelHandle) {
 				addError(SOP_MESSAGE, "GridHandle did not contain the expected grid with value type float/Vec3f");
 				return error();
 			}
@@ -174,24 +163,13 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 			const auto leafCount = cpuHandle->tree().nodeCount(0);
 
 			// Launch kernels asynchronously
-			launch_kernels(gpuHandle, velGpuHandle, leafCount, dt, stream);
+			launch_kernels(gpuDenHandle, GpuVelHandle, leafCount, dt, stream);
 
 			// Asynchronous download of result grid from GPU
 			handle.deviceDownload(stream, false);
 
-			// Wait for all GPU tasks to complete
-			cudaStatus = cudaStreamSynchronize(stream);
-			if (cudaStatus != cudaSuccess) {
-				addError(SOP_MESSAGE, "CUDA stream synchronization failed after kernel execution");
-				return error();
-			}
-
 			// Destroy the CUDA stream
-			cudaStatus = cudaStreamDestroy(stream);
-			if (cudaStatus != cudaSuccess) {
-				addError(SOP_MESSAGE, "Failed to destroy CUDA stream");
-				return error();
-			}
+			cudaStreamDestroy(stream);
 
 			// Convert the NanoVDB grid back to OpenVDB
 			nanoToOpen = nanovdb::tools::nanoToOpenVDB(handle);

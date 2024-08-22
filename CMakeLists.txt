@@ -41,6 +41,8 @@ add_library(${PROJECT_NAME} SHARED
         src/OpenVDB_Utils/Utils.hpp
         src/OpenVDB_Utils/AttributeTransferUtil.hpp
         src/IncomingDataCache.hpp
+        src/GU_PrimNanoVDB.cpp
+        src/GU_PrimNanoVDB.hpp
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
