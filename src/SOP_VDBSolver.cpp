@@ -1,19 +1,22 @@
 #include "SOP_VDBSolver.hpp"
 
-#include <openvdb/openvdb.h>
+#include <GU/GU_Detail.h>
+#include <GU/GU_PrimVDB.h>
+#include <UT/UT_DSOVersion.h>
+#include <nanovdb/NanoVDB.h>
+#include <nanovdb/cuda/DeviceBuffer.h>
+#include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/tools/NanoToOpenVDB.h>
 #include <openvdb/tools/GridOperators.h>
 #include <openvdb/tools/GridTransformer.h>
 #include <openvdb/tools/VolumeAdvect.h>
 
-#include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/CreateNanoGrid.h>
-#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
-
-#include <GU/GU_Detail.h>
-#include <GU/GU_PrimVDB.h>
-#include <UT/UT_DSOVersion.h>
-
 using namespace VdbSolver;
+
+
+extern "C" void launch_kernels(nanovdb::NanoGrid<float>*, const nanovdb::NanoGrid<nanovdb::Vec3f>*, int, float,
+                               cudaStream_t stream);
+
 
 void newSopOperator(OP_OperatorTable* table) {
 	if (table == nullptr) return;
@@ -24,6 +27,10 @@ void newSopOperator(OP_OperatorTable* table) {
 	              .setDefault(PRMoneDefaults)
 	              .setTooltip("Print debug information to the console")
 	              .setDocumentation("Print debug information to the console"));
+
+	parms.add(houdini_utils::ParmFactory(PRM_TOGGLE, "GPU", "Runs on the GPU")
+	              .setDefault(PRMoneDefaults)
+	              .setTooltip("Runs advection on the GPU using NanoVDB"));
 
 	// Level set grid
 	parms.add(houdini_utils::ParmFactory(PRM_STRING, "group", "Group")
@@ -73,7 +80,6 @@ const char* SOP_VdbSolver::inputLabel(const unsigned idx) const {
 
 OP_Node* SOP_VdbSolver::myConstructor(OP_Network* net, const char* name, OP_Operator* op) {
 	return new SOP_VdbSolver(net, name, op);
-
 }
 
 SOP_VdbSolver::SOP_VdbSolver(OP_Network* net, const char* name, OP_Operator* op) : SOP_NodeVDB(net, name, op) {}
@@ -94,15 +100,11 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 
 		openvdb::FloatGrid::ConstPtr densGrid;
 		openvdb::VectorGrid::ConstPtr velGrid;
-		openvdb::FloatGrid::Ptr testNano;
 
 		// Get the VDB grids from the input geometry
 		for (VdbPrimIterator it(gdp, matchGroup(*gdp, evalStdString("group", now))); it; ++it) {
 			if (boss.wasInterrupted()) break;
 			densGrid = openvdb::gridConstPtrCast<openvdb::FloatGrid>((*it)->getConstGridPtr());
-
-			//test
-			testNano = openvdb::gridPtrCast<openvdb::FloatGrid>((*it)->getGridPtr());
 			if (densGrid) break;
 		}
 
@@ -120,22 +122,101 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 		// Process grids:
 		const double dt = evalFloat("timestep", 0, now);
 
-		// Advect density using the advected velocity
-		const auto advectedDens = advect(densGrid, velGrid, dt);
-		if (!advectedDens) {
-			addError(SOP_MESSAGE, "Failed to advect density grid");
-			return error();
-		}
+		openvdb::FloatGrid::Ptr advectedDens = nullptr;
+		openvdb::GridBase::Ptr nanoToOpen = nullptr;
 
-		auto handle = nanovdb::createNanoGrid<openvdb::FloatGrid, float, nanovdb::CudaDeviceBuffer>(*testNano);
+		if (evalInt("GPU", 0, now)) {
+			// Convert density and velocity grids if not already converted
+			nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
+			    nanovdb::tools::createNanoGrid<openvdb::FloatGrid, float, nanovdb::cuda::DeviceBuffer>(*densGrid);
+
+			nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> velHandle =
+			    nanovdb::tools::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::cuda::DeviceBuffer>(
+			        *velGrid);
+
+			// Reuse the same CUDA stream for all operations
+			cudaStream_t stream;
+			cudaError_t cudaStatus = cudaStreamCreate(&stream);
+			if (cudaStatus != cudaSuccess) {
+				addError(SOP_MESSAGE, "Failed to create CUDA stream");
+				return error();
+			}
+
+			// Asynchronous upload of grids to GPU
+			handle.deviceUpload(stream, false);
+			velHandle.deviceUpload(stream, false);
+
+			// Wait for uploads to complete before launching kernels
+			cudaStatus = cudaStreamSynchronize(stream);
+			if (cudaStatus != cudaSuccess) {
+				addError(SOP_MESSAGE, "CUDA stream synchronization failed");
+				return error();
+			}
+
+			// Obtain device grid pointers
+			nanovdb::FloatGrid* gpuHandle = handle.deviceGrid<float>();
+			const nanovdb::Vec3fGrid* velGpuHandle = velHandle.deviceGrid<nanovdb::Vec3f>();
+
+			// Validate grid pointers
+			if (!gpuHandle || !velGpuHandle) {
+				addError(SOP_MESSAGE, "GridHandle did not contain the expected grid with value type float/Vec3f");
+				return error();
+			}
+
+			const nanovdb::FloatGrid* cpuHandle = handle.grid<float>();
+
+			// Ensure the grid supports sequential access to leaf nodes
+			if (!cpuHandle->isSequential<0>()) {
+				addError(SOP_MESSAGE, "Grid does not support sequential access to leaf nodes!");
+				return error();
+			}
+
+			const auto leafCount = cpuHandle->tree().nodeCount(0);
+
+			// Launch kernels asynchronously
+			launch_kernels(gpuHandle, velGpuHandle, leafCount, dt, stream);
+
+			// Asynchronous download of result grid from GPU
+			handle.deviceDownload(stream, false);
+
+			// Wait for all GPU tasks to complete
+			cudaStatus = cudaStreamSynchronize(stream);
+			if (cudaStatus != cudaSuccess) {
+				addError(SOP_MESSAGE, "CUDA stream synchronization failed after kernel execution");
+				return error();
+			}
+
+			// Destroy the CUDA stream
+			cudaStatus = cudaStreamDestroy(stream);
+			if (cudaStatus != cudaSuccess) {
+				addError(SOP_MESSAGE, "Failed to destroy CUDA stream");
+				return error();
+			}
+
+			// Convert the NanoVDB grid back to OpenVDB
+			nanoToOpen = nanovdb::tools::nanoToOpenVDB(handle);
+
+		} else {
+			advectedDens = advect<openvdb::FloatGrid>(densGrid, velGrid, dt);
+
+			if (!advectedDens) {
+				addError(SOP_MESSAGE, "Failed to advect density grid");
+				return error();
+			}
+		}
 
 		gdp->clearAndDestroy();
 
 		// Create new VDB primitives from the advected grids
-		GU_PrimVDB::buildFromGrid(*gdp, advectedDens, nullptr, "density");
+		if (evalInt("GPU", 0, now)) {
+			const openvdb::FloatGrid::Ptr out = openvdb::gridPtrCast<openvdb::FloatGrid>(nanoToOpen);
+			GU_PrimVDB::buildFromGrid(*gdp, out, nullptr, "density");
+		} else {
+			GU_PrimVDB::buildFromGrid(*gdp, advectedDens, nullptr, "density");
+		}
+
 
 		boss.end();
-
 	} catch (std::exception& e) {
 		addError(SOP_MESSAGE, e.what());
 		return error();
@@ -145,10 +226,7 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 }
 
 
-
-
-
-template<typename GridType>
+template <typename GridType>
 typename GridType::ConstPtr SOP_VdbSolver::Cache::processGrid(const GridCPtr& in) {
 	try {
 		typename GridType::ConstPtr transformed = openvdb::gridConstPtrCast<GridType>(in);
@@ -166,8 +244,9 @@ typename GridType::ConstPtr SOP_VdbSolver::Cache::processGrid(const GridCPtr& in
 	}
 }
 
-template<typename GridType>
-typename GridType::Ptr SOP_VdbSolver::Cache::advect(const std::shared_ptr<const GridType>& grid, const std::shared_ptr<const openvdb::VectorGrid>& velocity, const double dt) {
+template <typename GridType>
+typename GridType::Ptr SOP_VdbSolver::Cache::advect(const openvdb::FloatGrid::ConstPtr& grid,
+                                                    const openvdb::VectorGrid::ConstPtr& velocity, const double dt) {
 	HoudiniInterrupter boss("Advecting grid...");
 	boss.start();
 

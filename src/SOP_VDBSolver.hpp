@@ -12,16 +12,17 @@ class SOP_VdbSolver final : public SOP_NodeVDB {
 	static OP_Node* myConstructor(OP_Network*, const char*, OP_Operator*);
 
 	class Cache final : public SOP_VDBCacheOptions {
-	public:
+	   public:
 		OP_ERROR cookVDBSop(OP_Context&) override;
 
-		template<typename GridType>
+		template <typename GridType>
 		typename GridType::ConstPtr processGrid(const GridCPtr& in);
 
 
 		// GridType is either openvdb::FloatGrid or openvdb::VectorGrid
-		template<typename GridType>
-		typename GridType::Ptr advect(const std::shared_ptr<const GridType>& grid, const std::shared_ptr<const openvdb::VectorGrid>& velocity, const double dt);
+		template <typename GridType>
+		typename GridType::Ptr advect(const openvdb::FloatGrid::ConstPtr& grid,
+		                              const openvdb::VectorGrid::ConstPtr& velocity, double dt);
 	};
 
    protected:
