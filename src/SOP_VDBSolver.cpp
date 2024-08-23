@@ -11,11 +11,14 @@
 #include <openvdb/tools/GridTransformer.h>
 #include <openvdb/tools/VolumeAdvect.h>
 
+#include "Utils/ScopedTimer.hpp"
+
 using namespace VdbSolver;
 
 
-extern "C" void launch_kernels(nanovdb::NanoGrid<float>*, const nanovdb::NanoGrid<nanovdb::Vec3f>*, int, float,
-                               cudaStream_t stream);
+extern "C" void launch_kernels(nanovdb::FloatGrid*, const nanovdb::Vec3fGrid*, int, float, float, cudaStream_t stream);
+
+extern "C" void scaleActiveVoxels(nanovdb::FloatGrid* grid_d, uint64_t leafCount, float scale);
 
 
 void newSopOperator(OP_OperatorTable* table) {
@@ -102,7 +105,7 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 		openvdb::VectorGrid::ConstPtr velGrid;
 
 		// Get the VDB grids from the input geometry
-		for (VdbPrimIterator it(gdp, matchGroup(*gdp, evalStdString("group", now))); it; ++it) {
+		for (VdbPrimCIterator it(gdp, matchGroup(*gdp, evalStdString("group", now))); it; ++it) {
 			if (boss.wasInterrupted()) break;
 			densGrid = openvdb::gridConstPtrCast<openvdb::FloatGrid>((*it)->getConstGridPtr());
 			if (densGrid) break;
@@ -127,27 +130,32 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 
 		if (evalInt("GPU", 0, now)) {
 			// Convert density and velocity grids if not already converted
-			nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
-			    nanovdb::tools::createNanoGrid<openvdb::FloatGrid, float, nanovdb::cuda::DeviceBuffer>(*densGrid);
+			nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle;
+			{
+				ScopedTimer timer("Convert to NanoVDB");
+				handle =
+				    nanovdb::tools::createNanoGrid<openvdb::FloatGrid, float, nanovdb::cuda::DeviceBuffer>(*densGrid);
 
+			}
+			/*
 			nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> velHandle =
 			    nanovdb::tools::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::cuda::DeviceBuffer>(
 			        *velGrid);
 
-			// Reuse the same CUDA stream for all operations
+			*/
+
 			cudaStream_t stream;
 			cudaStreamCreate(&stream);
 
-			// Asynchronous upload of grids to GPU
-			handle.deviceUpload(stream, false);
-			velHandle.deviceUpload(stream, false);
-
-			// Obtain device grid pointers
+			{
+				ScopedTimer timer("Upload to GPU");
+				handle.deviceUpload(stream, false);
+				// velHandle.deviceUpload(stream, false);
+			}
 			nanovdb::FloatGrid* gpuDenHandle = handle.deviceGrid<float>();
-			const nanovdb::Vec3fGrid* GpuVelHandle = velHandle.deviceGrid<nanovdb::Vec3f>();
+			// const nanovdb::Vec3fGrid* GpuVelHandle = velHandle.deviceGrid<nanovdb::Vec3f>();
 
-			// Validate grid pointers
-			if (!gpuDenHandle || !GpuVelHandle) {
+			if (!gpuDenHandle) {
 				addError(SOP_MESSAGE, "GridHandle did not contain the expected grid with value type float/Vec3f");
 				return error();
 			}
@@ -161,18 +169,28 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 			}
 
 			const auto leafCount = cpuHandle->tree().nodeCount(0);
+			const auto voxelSize = cpuHandle->voxelSize()[0];
 
 			// Launch kernels asynchronously
-			launch_kernels(gpuDenHandle, GpuVelHandle, leafCount, dt, stream);
+			// launch_kernels(gpuDenHandle, GpuVelHandle, leafCount, voxelSize, dt, stream);
 
-			// Asynchronous download of result grid from GPU
-			handle.deviceDownload(stream, false);
+			{
+				ScopedTimer timer("Kernel");
+				scaleActiveVoxels(gpuDenHandle, leafCount, dt);
+			}
+
+			{
+				ScopedTimer timer("Download from GPU");
+				handle.deviceDownload(stream, false);
+			}
 
 			// Destroy the CUDA stream
 			cudaStreamDestroy(stream);
 
-			// Convert the NanoVDB grid back to OpenVDB
-			nanoToOpen = nanovdb::tools::nanoToOpenVDB(handle);
+			{
+				ScopedTimer timer("Convert to OpenVDB");
+				nanoToOpen = nanovdb::tools::nanoToOpenVDB(handle);
+			}
 
 		} else {
 			advectedDens = advect<openvdb::FloatGrid>(densGrid, velGrid, dt);
