@@ -1,6 +1,10 @@
-#pragma once
+#ifndef __SOP_VDBSOLVER_HPP__
+#define __SOP_VDBSOLVER_HPP__
+
+
 #include "OpenVDB_Utils/SOP_NodeVDB.hpp"
 #include "OpenVDB_Utils/Utils.hpp"
+#include "Utils/IncomingDataCache.hpp"
 
 
 using namespace openvdb_houdini;
@@ -23,6 +27,8 @@ class SOP_VdbSolver final : public SOP_NodeVDB {
 		template <typename GridType>
 		typename GridType::Ptr advect(const openvdb::FloatGrid::ConstPtr& grid,
 		                              const openvdb::VectorGrid::ConstPtr& velocity, double dt);
+
+		IncomingDataCache mNanoCache;
 	};
 
    protected:
@@ -36,3 +42,5 @@ class SOP_VdbSolver final : public SOP_NodeVDB {
 };
 
 }  // namespace VdbSolver
+
+#endif  // __SOP_VDBSOLVER_HPP__

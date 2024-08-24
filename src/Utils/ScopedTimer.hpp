@@ -11,7 +11,7 @@ public:
 	explicit ScopedTimer(const char* name) : name_(name), start_(std::chrono::system_clock::now()) {}
 	~ScopedTimer() {
 		const auto end = std::chrono::system_clock::now();
-		std::printf("%s Time: %f\n", name_, std::chrono::duration<double>(end - start_).count());
+		std::printf("%s Time: %f ms\n", name_, std::chrono::duration<double>(end - start_).count()*100.0);
 	}
 private:
 	const char* name_;

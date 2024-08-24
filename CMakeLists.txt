@@ -40,8 +40,9 @@ add_library(${PROJECT_NAME} SHARED
         src/OpenVDB_Utils/Utils.cpp
         src/OpenVDB_Utils/Utils.hpp
         src/OpenVDB_Utils/AttributeTransferUtil.hpp
-        src/IncomingDataCache.hpp
+        src/Utils/IncomingDataCache.hpp
         src/Utils/ScopedTimer.hpp
+        src/Utils/CudaStreamWrapper.hpp
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE

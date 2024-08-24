@@ -11,6 +11,7 @@
 #include <openvdb/tools/GridTransformer.h>
 #include <openvdb/tools/VolumeAdvect.h>
 
+#include "Utils/CudaStreamWrapper.hpp"
 #include "Utils/ScopedTimer.hpp"
 
 using namespace VdbSolver;
@@ -117,7 +118,7 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 			if (velGrid) break;
 		}
 
-		if (!densGrid || !velGrid) {
+		if (!densGrid) {
 			addError(SOP_MESSAGE, "No Valid grids found in the input geometry");
 			return error();
 		}
@@ -130,29 +131,19 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 
 		if (evalInt("GPU", 0, now)) {
 			// Convert density and velocity grids if not already converted
-			nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle;
-			{
-				ScopedTimer timer("Convert to NanoVDB");
-				handle =
-				    nanovdb::tools::createNanoGrid<openvdb::FloatGrid, float, nanovdb::cuda::DeviceBuffer>(*densGrid);
+			// Use the cached density grid
+			auto& densityHandle = mNanoCache.getCachedDensityGrid(densGrid);
 
-			}
-			/*
-			nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> velHandle =
-			    nanovdb::tools::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::cuda::DeviceBuffer>(
-			        *velGrid);
-
-			*/
 
 			cudaStream_t stream;
 			cudaStreamCreate(&stream);
 
 			{
 				ScopedTimer timer("Upload to GPU");
-				handle.deviceUpload(stream, false);
+				densityHandle.deviceUpload(stream, false);
 				// velHandle.deviceUpload(stream, false);
 			}
-			nanovdb::FloatGrid* gpuDenHandle = handle.deviceGrid<float>();
+			nanovdb::FloatGrid* gpuDenHandle = densityHandle.deviceGrid<float>();
 			// const nanovdb::Vec3fGrid* GpuVelHandle = velHandle.deviceGrid<nanovdb::Vec3f>();
 
 			if (!gpuDenHandle) {
@@ -160,7 +151,7 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 				return error();
 			}
 
-			const nanovdb::FloatGrid* cpuHandle = handle.grid<float>();
+			const nanovdb::FloatGrid* cpuHandle = densityHandle.grid<float>();
 
 			// Ensure the grid supports sequential access to leaf nodes
 			if (!cpuHandle->isSequential<0>()) {
@@ -181,7 +172,7 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 
 			{
 				ScopedTimer timer("Download from GPU");
-				handle.deviceDownload(stream, false);
+				densityHandle.deviceDownload(stream, false);
 			}
 
 			// Destroy the CUDA stream
@@ -189,7 +180,7 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 
 			{
 				ScopedTimer timer("Convert to OpenVDB");
-				nanoToOpen = nanovdb::tools::nanoToOpenVDB(handle);
+				nanoToOpen = nanovdb::tools::nanoToOpenVDB(densityHandle);
 			}
 
 		} else {
@@ -205,6 +196,7 @@ OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
 
 		// Create new VDB primitives from the advected grids
 		if (evalInt("GPU", 0, now)) {
+			ScopedTimer timer("Create VDB grid");
 			const openvdb::FloatGrid::Ptr out = openvdb::gridPtrCast<openvdb::FloatGrid>(nanoToOpen);
 			GU_PrimVDB::buildFromGrid(*gdp, out, nullptr, "density");
 		} else {
