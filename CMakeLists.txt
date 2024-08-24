@@ -57,4 +57,4 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 )
 
 # Sets several common target properties, such as the library's output directory.
-houdini_configure_target(${PROJECT_NAME})
+houdini_configure_target(${PROJECT_NAME} $ENV{DSO_Path})

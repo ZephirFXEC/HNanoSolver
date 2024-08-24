@@ -34,11 +34,12 @@ class SOP_VdbSolver final : public SOP_NodeVDB {
    protected:
 	// constructor, destructor
 	SOP_VdbSolver(OP_Network* net, const char* name, OP_Operator* op);
-
 	~SOP_VdbSolver() override;
 
 	// labeling node inputs in Houdini UI
 	const char* inputLabel(unsigned idx) const override;
+
+	Cache cache;
 };
 
 }  // namespace VdbSolver

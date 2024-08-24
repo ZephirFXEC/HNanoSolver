@@ -1,6 +1,6 @@
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/math/SampleFromVoxels.h>
-#include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/util/CreateNanoGrid.h>
+#include <nanovdb/util/SampleFromVoxels.h>
 
 __global__ void gpu_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const uint64_t leafCount,
                            const float voxelSize, const float dt) {
@@ -15,8 +15,8 @@ __global__ void gpu_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fG
 
 	const auto velAccessor = velGrid->getAccessor();
 	const auto denAccessor = deviceGrid->getAccessor();
-	const auto velSampler = nanovdb::math::createSampler<1>(velAccessor);
-	const auto denSampler = nanovdb::math::createSampler<1>(denAccessor);
+	const auto velSampler = nanovdb::createSampler<1>(velAccessor);
+	const auto denSampler = nanovdb::createSampler<1>(denAccessor);
 
 	if (leaf_d->isActive(i)) {
 		// Get the position of the voxel in index space
@@ -49,5 +49,5 @@ extern "C" void launch_kernels(nanovdb::FloatGrid* deviceGrid, const nanovdb::Ve
 	// Launch the kernel
 	gpu_kernel<<<gridSize, blockSize, 0, stream>>>(deviceGrid, velGrid, leafCount, voxelSize, dt);
 
-    cudaDeviceSynchronize();
+	cudaDeviceSynchronize();
 }

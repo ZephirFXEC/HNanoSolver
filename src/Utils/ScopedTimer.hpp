@@ -7,13 +7,15 @@
 #include <chrono>
 
 class ScopedTimer {
-public:
+   public:
 	explicit ScopedTimer(const char* name) : name_(name), start_(std::chrono::system_clock::now()) {}
 	~ScopedTimer() {
 		const auto end = std::chrono::system_clock::now();
-		std::printf("%s Time: %f ms\n", name_, std::chrono::duration<double>(end - start_).count()*100.0);
+		std::printf("%s Time: %f ms\n", name_, std::chrono::duration<double>(end - start_).count() * 1000.0);
+		std::fflush(stdout);
 	}
-private:
+
+   private:
 	const char* name_;
 	const std::chrono::time_point<std::chrono::system_clock> start_;
 };

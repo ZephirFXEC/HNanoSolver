@@ -1,11 +1,9 @@
-#include <thrust/iterator/counting_iterator.h>
 #include <thrust/for_each.h>
+#include <thrust/iterator/counting_iterator.h>
 
-#include <nanovdb/cuda/DeviceBuffer.h>
-#include <nanovdb/cuda/GridHandle.cuh>
+#include <nanovdb/util/cuda/CudaGridHandle.cuh>
 
-extern "C"  void scaleActiveVoxels(nanovdb::FloatGrid *grid_d, const uint64_t leafCount, float scale)
-{
+extern "C" void scaleActiveVoxels(nanovdb::FloatGrid *grid_d, const uint64_t leafCount, float scale) {
 	auto kernel = [grid_d, scale] __device__(const uint64_t n) {
 		auto *leaf_d =
 		    grid_d->tree().getFirstNode<0>() + (n >> 9);  // this only works if grid->isSequential<0>() == true
@@ -17,5 +15,5 @@ extern "C"  void scaleActiveVoxels(nanovdb::FloatGrid *grid_d, const uint64_t le
 	};
 
 	const thrust::counting_iterator<uint64_t, thrust::device_system_tag> iter(0);
-	thrust::for_each(iter, iter + 512*leafCount, kernel);
+	thrust::for_each(iter, iter + 512 * leafCount, kernel);
 }
