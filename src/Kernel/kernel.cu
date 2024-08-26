@@ -2,6 +2,7 @@
 #include <nanovdb/util/CreateNanoGrid.h>
 #include <nanovdb/util/SampleFromVoxels.h>
 
+
 __global__ void gpu_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const uint64_t leafCount,
                            const float voxelSize, const float dt) {
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -11,16 +12,18 @@ __global__ void gpu_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fG
 	auto& tree = deviceGrid->tree();
 
 	auto* leaf_d = tree.getFirstNode<0>() + (idx >> 9);
-	const int i = idx & 511;
+	const int i_d = idx & 511;
+
+	auto* leaf_v = velGrid->tree().getFirstNode<0>() + (idx >> 9);
+	const int i_v = idx & 511;
 
 	const auto velAccessor = velGrid->getAccessor();
 	const auto denAccessor = deviceGrid->getAccessor();
 	const auto velSampler = nanovdb::createSampler<1>(velAccessor);
 	const auto denSampler = nanovdb::createSampler<1>(denAccessor);
 
-	if (leaf_d->isActive(i)) {
 		// Get the position of the voxel in index space
-		const nanovdb::Coord voxelCoord = leaf_d->offsetToGlobalCoord(i);
+		const nanovdb::Coord voxelCoord = leaf_d->offsetToGlobalCoord(i_d);
 
 		// Sample the velocity grid at the world space position
 		const nanovdb::Vec3f velocity = velSampler(voxelCoord.asVec3s());
@@ -32,13 +35,17 @@ __global__ void gpu_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fG
 		const float advectedDensity = denSampler(displacedPos);
 
 		// Set the new density value
-		leaf_d->setValueOnly(voxelCoord, advectedDensity);
-	}
+		leaf_d->setValue(voxelCoord, advectedDensity);
+
 }
 
 // This is called by the client code on the host
-extern "C" void launch_kernels(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const int leafCount,
-                               const float voxelSize, const float dt, cudaStream_t stream) {
+extern "C" void launch_kernels(
+	nanovdb::FloatGrid* deviceGrid,
+	nanovdb::Vec3fGrid* velGrid,
+	const int leafCount,
+	const float voxelSize, const float dt, cudaStream_t stream)
+{
 	// Calculate the total number of voxels to process
 	const uint64_t totalVoxels = 512 * leafCount;
 

@@ -2,46 +2,41 @@
 #define __SOP_VDBSOLVER_HPP__
 
 
-#include "OpenVDB_Utils/SOP_NodeVDB.hpp"
-#include "OpenVDB_Utils/Utils.hpp"
-#include "Utils/IncomingDataCache.hpp"
-
-
-using namespace openvdb_houdini;
+#include <PRM/PRM_TemplateBuilder.h>
+#include <SOP/SOP_Node.h>
+#include <SOP/SOP_NodeVerb.h>
 
 namespace VdbSolver {
-class SOP_VdbSolver final : public SOP_NodeVDB {
+class SOP_VdbSolver final : public SOP_Node {
    public:
-	// node contructor for HDK
-	static OP_Node* myConstructor(OP_Network*, const char*, OP_Operator*);
+	SOP_VdbSolver(OP_Network* net, const char* name, OP_Operator* op) : SOP_Node(net, name, op) {
+		mySopFlags.setManagesDataIDs(true);
+	}
 
-	class Cache final : public SOP_VDBCacheOptions {
-	   public:
-		OP_ERROR cookVDBSop(OP_Context&) override;
+	~SOP_VdbSolver() override = default;
 
-		template <typename GridType>
-		typename GridType::ConstPtr processGrid(const GridCPtr& in);
+	static PRM_Template* buildTemplates();
+
+	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) {
+		return new SOP_VdbSolver(net, name, op);
+	}
+
+	OP_ERROR cookMySop(OP_Context& context) override { return cookMyselfAsVerb(context); }
+
+	const SOP_NodeVerb* cookVerb() const override;
 
 
-		// GridType is either openvdb::FloatGrid or openvdb::VectorGrid
-		template <typename GridType>
-		typename GridType::Ptr advect(const openvdb::FloatGrid::ConstPtr& grid,
-		                              const openvdb::VectorGrid::ConstPtr& velocity, double dt);
-
-		IncomingDataCache mNanoCache;
-	};
-
-   protected:
-	// constructor, destructor
-	SOP_VdbSolver(OP_Network* net, const char* name, OP_Operator* op);
-	~SOP_VdbSolver() override;
-
-	// labeling node inputs in Houdini UI
-	const char* inputLabel(unsigned idx) const override;
-
-	Cache cache;
+	const char* inputLabel(unsigned idx) const override {
+		switch (idx) {
+			case 0:
+				return "Input Grids";
+			case 1:
+				return "Velocity Grids";
+			default:
+				return "default";
+		}
+	}
 };
-
 }  // namespace VdbSolver
 
 #endif  // __SOP_VDBSOLVER_HPP__

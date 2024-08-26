@@ -7,6 +7,7 @@ project(HNanoSolver LANGUAGES CXX CUDA)
 add_compile_definitions(
         SESI_OPENVDB
         NANOVDB_USE_OPENVDB
+        NANOVDB_USE_TBB
 )
 
 
@@ -24,22 +25,14 @@ list(APPEND CMAKE_PREFIX_PATH "$ENV{HFS}/toolkit/cmake" )
 find_package(Houdini REQUIRED)
 # ------- End Houdini -----------
 
+houdini_generate_proto_headers( FILES src/SOP_VDBSolver.cpp )
+
 
 add_library(${PROJECT_NAME} SHARED
         src/SOP_VDBSolver.cpp
         src/SOP_VDBSolver.hpp
-        src/OpenVDB_Utils/ParmFactory.cpp
-        src/OpenVDB_Utils/ParmFactory.hpp
-        src/OpenVDB_Utils/SOP_NodeVDB.cpp
-        src/OpenVDB_Utils/SOP_NodeVDB.hpp
-        src/OpenVDB_Utils/SOP_VDBVerbUtils.hpp
-        src/OpenVDB_Utils/Geometry.cpp
-        src/OpenVDB_Utils/Geometry.hpp
-        src/OpenVDB_Utils/PointUtils.cpp
-        src/OpenVDB_Utils/PointUtils.hpp
-        src/OpenVDB_Utils/Utils.cpp
-        src/OpenVDB_Utils/Utils.hpp
-        src/OpenVDB_Utils/AttributeTransferUtil.hpp
+        src/Utils/Utils.cpp
+        src/Utils/Utils.hpp
         src/Utils/IncomingDataCache.hpp
         src/Utils/ScopedTimer.hpp
         src/Utils/CudaStreamWrapper.hpp

@@ -10,13 +10,14 @@
 #include <nanovdb/util/GridHandle.h>
 #include <nanovdb/util/cuda/CudaDeviceBuffer.h>
 #include <openvdb/openvdb.h>
-
 #include <memory>
+
+#include "ScopedTimer.hpp"
 
 class IncomingDataCache {
    public:
 	IncomingDataCache() = default;
-	~IncomingDataCache() { densityHandle.reset(); }
+	~IncomingDataCache() { pHandle.reset(); }
 
 	// Remove copy semantics
 	IncomingDataCache(const IncomingDataCache&) = delete;
@@ -26,31 +27,43 @@ class IncomingDataCache {
 	IncomingDataCache(IncomingDataCache&&) = default;
 	IncomingDataCache& operator=(IncomingDataCache&&) = default;
 
-	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& getCachedDensityGrid(const openvdb::FloatGrid::ConstPtr& densGrid) {
-		if (!densityHandle) {
-			densityHandle = std::make_unique<nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>>(
-			    nanovdb::createNanoGrid<openvdb::FloatGrid, float, nanovdb::CudaDeviceBuffer>(*densGrid));
-			printf("Creating NanoVDB density grid\n");
+	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& getCachedGrid(const openvdb::VectorGrid::ConstPtr& grid) {
+		if (!pHandle) {
+			ScopedTimer timer("Creating NanoVDB Vector grid");
+			pHandle = std::make_unique<nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>>(
+			    nanovdb::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::CudaDeviceBuffer>(*grid));
 		}
-		return *densityHandle;
+		return *pHandle;
+	}
+
+	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& getCachedGrid(const openvdb::FloatGrid::ConstPtr& grid) {
+		if (!pHandle) {
+			ScopedTimer timer("Creating NanoVDB float grid");
+			pHandle = std::make_unique<nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>>(
+				nanovdb::createNanoGrid<openvdb::FloatGrid, float, nanovdb::CudaDeviceBuffer>(*grid));
+		}
+		return *pHandle;
 	}
 
 
 	void swap(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& other) {
-		if (densityHandle) {
-			std::swap(*densityHandle, other);
+		if (pHandle) {
+			std::swap(*pHandle, other);
 		} else {
-			densityHandle = std::make_unique<nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>>(std::move(other));
+			pHandle = std::make_unique<nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>>(std::move(other));
 		}
 	}
 
 
-	[[nodiscard]] bool hasDensityGrid() const { return densityHandle != nullptr; }
+	[[nodiscard]] bool hasDensityGrid() const { return pHandle != nullptr; }
 
-	void Invalidate();
+	void Invalidate() {
+		pHandle.reset();
+	};
 
    private:
-	std::unique_ptr<nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>> densityHandle = nullptr;
+	std::unique_ptr<nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>> pHandle = nullptr;
+
 };
 
 #endif  // __INCOMINGDATACACHE_HPP__

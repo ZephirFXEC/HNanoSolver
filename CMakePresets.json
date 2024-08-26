@@ -1,0 +1,43 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {}
+    },
+    {
+      "name": "x64-debug",
+      "inherits": "default",
+      "description": "Build using Visual Studio 2022 with v142 toolset (Debug)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_GENERATOR_TOOLSET": "v142"
+      }
+    },
+    {
+      "name": "x64-release",
+      "inherits": "default",
+      "description": "Build using Visual Studio 2022 with v142 toolset (Release)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_GENERATOR_TOOLSET": "v142"
+      }
+    }
+  ]
+}

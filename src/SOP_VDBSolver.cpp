@@ -2,256 +2,251 @@
 
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimVDB.h>
-#include <GU/GU_PrimVolume.h>
 #include <UT/UT_DSOVersion.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/CreateNanoGrid.h>
 #include <nanovdb/util/NanoToOpenVDB.h>
 #include <nanovdb/util/cuda/CudaDeviceBuffer.h>
-#include <openvdb/tools/GridOperators.h>
-#include <openvdb/tools/GridTransformer.h>
-#include <openvdb/tools/VolumeAdvect.h>
 
-#include "Utils/CudaStreamWrapper.hpp"
+#include "SOP_VDBSolver.proto.h"
 #include "Utils/ScopedTimer.hpp"
+#include "Utils/Utils.hpp"
 
 using namespace VdbSolver;
 
+extern "C" void launch_kernels(nanovdb::FloatGrid*, nanovdb::Vec3fGrid*, int, float, float, cudaStream_t stream);
 
-extern "C" void launch_kernels(nanovdb::FloatGrid*, const nanovdb::Vec3fGrid*, int, float, float, cudaStream_t stream);
+extern "C" void scaleActiveVoxels(nanovdb::FloatGrid*, uint64_t, float);
 
-extern "C" void scaleActiveVoxels(nanovdb::FloatGrid* grid_d, uint64_t leafCount, float scale);
-
-void newSopOperator(OP_OperatorTable* table) {
-	if (table == nullptr) return;
-
-	houdini_utils::ParmList parms;
-
-	parms.add(houdini_utils::ParmFactory(PRM_TOGGLE, "debug", "Print Debug Information")
-	              .setDefault(PRMoneDefaults)
-	              .setTooltip("Print debug information to the console")
-	              .setDocumentation("Print debug information to the console"));
-
-	parms.add(houdini_utils::ParmFactory(PRM_TOGGLE, "GPU", "Runs on the GPU")
-	              .setDefault(PRMoneDefaults)
-	              .setTooltip("Runs advection on the GPU using NanoVDB"));
-
-	// Level set grid
-	parms.add(houdini_utils::ParmFactory(PRM_STRING, "group", "Group")
-	              .setChoiceList(&houdini_utils::PrimGroupMenuInput1)
-	              .setTooltip("VDB grid(s) to advect.")
-	              .setDocumentation("A subset of VDBs in the first input to move using the velocity field"
-	                                " (see [specifying volumes|/model/volumes#group])"));
-
-	// Velocity grid
-	parms.add(houdini_utils::ParmFactory(PRM_STRING, "velgroup", "Velocity")
-	              .setChoiceList(&houdini_utils::PrimGroupMenuInput2)
-	              .setTooltip("Velocity grid")
-	              .setDocumentation("The name of a VDB primitive in the second input to use as"
-	                                " the velocity field (see [specifying volumes|/model/volumes#group])\n\n"
-	                                "This must be a vector-valued VDB primitive."
-	                                " You can use the [Vector Merge node|Node:sop/DW_OpenVDBVectorMerge]"
-	                                " to turn a `vel.[xyz]` triple into a single primitive."));
-
-	// Advect: timestep
-	parms.add(houdini_utils::ParmFactory(PRM_FLT, "timestep", "Timestep")
-	              .setDefault(1, "1.0/$FPS")
-	              .setDocumentation("Number of seconds of movement to apply to the input points\n\n"
-	                                "The default is `1/$FPS` (one frame's worth of time)."
-	                                " You can use negative values to move the points backwards through"
-	                                " the velocity field."));
-
-
-	// Register this operator.
-	OpenVDBOpFactory("HNanoAdvect", SOP_VdbSolver::myConstructor, parms, *table)
-	    .setNativeName("hnanoadvect")
-	    .addInput("VDBs to Advect")
-	    .addInput("Velocity VDB")
-	    .setVerb(SOP_NodeVerb::COOK_INPLACE, [] { return new SOP_VdbSolver::Cache; });
-}
-
-const char* SOP_VdbSolver::inputLabel(const unsigned idx) const {
-	switch (idx) {
-		case 0:
-			return "Input Grids";
-
-		case 1:
-			return "Velocity Grids";
-		default:
-			return "default";
-	}
-}
-
-OP_Node* SOP_VdbSolver::myConstructor(OP_Network* net, const char* name, OP_Operator* op) {
-	return new SOP_VdbSolver(net, name, op);
-}
-
-SOP_VdbSolver::SOP_VdbSolver(OP_Network* net, const char* name, OP_Operator* op) : SOP_NodeVDB(net, name, op) {}
-
-SOP_VdbSolver::~SOP_VdbSolver() = default;
-
-OP_ERROR SOP_VdbSolver::Cache::cookVDBSop(OP_Context& context) {
-	try {
-		const fpreal now = context.getTime();
-
-		HoudiniInterrupter boss("Computing VDB grids");
-
-		const GU_Detail* velgeo = inputGeo(1, context);
-		if (!velgeo) {
-			addError(SOP_MESSAGE, "No velocity input geometry found");
-			return error();
+class SOP_VdbSolverCache : public SOP_NodeCache {
+   public:
+	SOP_VdbSolverCache() : SOP_NodeCache() {}
+	~SOP_VdbSolverCache() override {
+		if (pStream) {
+			cudaStreamDestroy(pStream);
 		}
 
-		openvdb::FloatGrid::ConstPtr densGrid;
-		openvdb::VectorGrid::ConstPtr velGrid;
+		if(!pDenHandle.isEmpty()) {
+			pDenHandle.reset();
+		}
+
+		if(!pVelHandle.isEmpty()) {
+			pVelHandle.reset();
+		}
+	}
+
+	cudaStream_t pStream = nullptr;
+	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pDenHandle;
+	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pVelHandle;
+};
+
+class SOP_VdbSolverVerb : public SOP_NodeVerb {
+   public:
+	SOP_VdbSolverVerb() = default;
+	~SOP_VdbSolverVerb() override = default;
+	[[nodiscard]] SOP_NodeParms* allocParms() const override { return new SOP_VDBSolverParms(); }
+	[[nodiscard]] SOP_NodeCache* allocCache() const override { return new SOP_VdbSolverCache(); }
+	[[nodiscard]] UT_StringHolder name() const override { return "hnanoadvect"; }
+
+	SOP_NodeVerb::CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_DUPLICATE; }
+
+	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
+
+	static const SOP_NodeVerb::Register<SOP_VdbSolverVerb> theVerb;
+
+	static const char* const theDsFile;
+};
+
+void newSopOperator(OP_OperatorTable* table) {
+	table->addOperator(new OP_Operator("hnanoadvect",
+	                                   "HNanoAdvect",
+	                                   SOP_VdbSolver::myConstructor,
+	                                   SOP_VdbSolver::buildTemplates(),
+	                                   2,
+	                                   2,
+	                                   nullptr,
+	                                   0));
+}
+
+const char* const SOP_VdbSolverVerb::theDsFile = R"THEDSFILE(
+{
+    name        parameters
+    parm {
+        name    "gpu"
+		label	"GPU"
+        label   "Runs on the GPU"
+        type    toggle
+        default { "1" }
+    }
+    parm {
+		name	"dengroup"
+		label	"Density Volumes"
+		type	string
+		default	{ "" }
+		parmtag	{ "script_action" "import soputils\nkwargs['geometrytype'] = (hou.geometryType.Primitives,)\nkwargs['inputindex'] = 0\nsoputils.selectGroupParm(kwargs)" }
+		parmtag	{ "script_action_help" "Select geometry from an available viewport.\nShift-click to turn on Select Groups." }
+		parmtag	{ "script_action_icon" "BUTTONS_reselect" }
+    }
+    parm {
+		name	"velgroup"
+		label	"Velocity Volumes"
+		type	string
+		default	{ "" }
+		parmtag	{ "script_action" "import soputils\nkwargs['geometrytype'] = (hou.geometryType.Primitives,)\nkwargs['inputindex'] = 1\nsoputils.selectGroupParm(kwargs)" }
+		parmtag	{ "script_action_help" "Select geometry from an available viewport.\nShift-click to turn on Select Groups." }
+		parmtag	{ "script_action_icon" "BUTTONS_reselect" }
+    }
+    parm {
+        name    "timestep"
+        label   "Time Step"
+        type    float
+        size    1
+        default { "1/$FPS" }
+    }
+}
+)THEDSFILE";
+
+PRM_Template* SOP_VdbSolver::buildTemplates() {
+	static PRM_TemplateBuilder templ("SOP_VDBSolver.cpp", SOP_VdbSolverVerb::theDsFile);
+	if (templ.justBuilt()) {
+		templ.setChoiceListPtr("dengroup", &SOP_Node::primGroupMenu);
+		templ.setChoiceListPtr("velgroup", &SOP_Node::primGroupMenu);
+	}
+	return templ.templates();
+}
+
+
+const SOP_NodeVerb::Register<SOP_VdbSolverVerb> SOP_VdbSolverVerb::theVerb;
+
+const SOP_NodeVerb* SOP_VdbSolver::cookVerb() const { return SOP_VdbSolverVerb::theVerb.get(); }
+
+
+void SOP_VdbSolverVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
+	auto&& sopparms = cookparms.parms<SOP_VDBSolverParms>();
+	auto sopcache = dynamic_cast<SOP_VdbSolverCache*>(cookparms.cache());
+
+	openvdb_houdini::HoudiniInterrupter boss("Computing VDB grids");
+
+	GU_Detail* detail = cookparms.gdh().gdpNC();
+	const GU_Detail* dengeo = cookparms.inputGeo(0);
+	const GU_Detail* velgeo = cookparms.inputGeo(1);
+
+	if (!velgeo || !dengeo) {
+		cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
+		return;
+	}
+
+	openvdb::FloatGrid::ConstPtr densGrid;
+	openvdb::VectorGrid::ConstPtr velGrid;
+
+	{
+		for (openvdb_houdini::VdbPrimCIterator it(dengeo); it; ++it) {
+			if (boss.wasInterrupted()) break;
+			densGrid = openvdb::gridConstPtrCast<openvdb::FloatGrid>((*it)->getConstGridPtr());
+			if (densGrid) break;
+		}
+
+		for (openvdb_houdini::VdbPrimCIterator it(velgeo); it; ++it) {
+			if (boss.wasInterrupted()) break;
+			velGrid = openvdb::gridConstPtrCast<openvdb::VectorGrid>((*it)->getConstGridPtr());
+			if (velGrid) break;
+		}
+
+		if (!densGrid || !velGrid) {
+			cookparms.sopAddError(SOP_MESSAGE, "No Valid grids found in the input geometry");
+			return;
+		}
+	}
+
+
+	/*
+	 * We save in cache the density and velocity grids in NanoVDB format. Each frame the density grid is copied back
+	 * on the cpu to create and display the grid in Houdini.
+	 * Since this cache isn't cleared when the node is dirtied / bypassed / recooked, we need to merge the sourcing grids
+	 * with the cached grid during the sourcing phase.
+	 *
+	 * TODO: Create a callback to clear the cache.
+	 * TODO: Merging grids logic using nanovdb::mergeGrids (cuda)
+	 */
+
+
+	if (sopparms.getGpu()) {
+		{  // Init class members
+			if (!sopcache->pStream) {
+				cudaStreamCreate(&sopcache->pStream);
+			}
+
+			if (sopcache->pDenHandle.isEmpty()) {
+				ScopedTimer timer("Convert to NanoVDB and Upload Density to GPU");
+				sopcache->pDenHandle =
+				    nanovdb::createNanoGrid<openvdb::FloatGrid, float, nanovdb::CudaDeviceBuffer>(*densGrid);
+				sopcache->pDenHandle.deviceUpload(sopcache->pStream, false);
+			}
+
+			if (sopcache->pVelHandle.isEmpty()) {
+				ScopedTimer timer("Convert to NanoVDB and Upload Velocity to GPU");
+				sopcache->pVelHandle =
+				    nanovdb::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::CudaDeviceBuffer>(*velGrid);
+				sopcache->pVelHandle.deviceUpload(sopcache->pStream, false);
+			}
+		}
+
+		nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pSourceDenHandle;
+		nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pSourceVelHandle;
+
+		{  // Init sourcing
+			pSourceDenHandle = nanovdb::createNanoGrid<openvdb::FloatGrid, float, nanovdb::CudaDeviceBuffer>(*densGrid);
+			pSourceDenHandle.deviceUpload(sopcache->pStream, false);
+
+			pSourceVelHandle =
+			    nanovdb::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::CudaDeviceBuffer>(*velGrid);
+			pSourceVelHandle.deviceUpload(sopcache->pStream, false);
+		}
 
 
 		{
-			for (VdbPrimCIterator it(gdp, matchGroup(*gdp, evalStdString("group", now))); it; ++it) {
-				if (boss.wasInterrupted()) break;
-				densGrid = openvdb::gridConstPtrCast<openvdb::FloatGrid>((*it)->getConstGridPtr());
-				if (densGrid) break;
-			}
+			nanovdb::FloatGrid* gpuDenGrid = sopcache->pDenHandle.deviceGrid<float>();
+			nanovdb::FloatGrid* gpuSourceDenGrid = pSourceDenHandle.deviceGrid<float>();
 
-			for (VdbPrimCIterator it(velgeo, matchGroup(*velgeo, evalStdString("velgroup", now))); it; ++it) {
-				if (boss.wasInterrupted()) break;
-				velGrid = openvdb::gridConstPtrCast<openvdb::VectorGrid>((*it)->getConstGridPtr());
-				if (velGrid) break;
-			}
+			nanovdb::Vec3fGrid* gpuVelGrid = sopcache->pVelHandle.deviceGrid<nanovdb::Vec3f>();
+			nanovdb::Vec3fGrid* gpuSourceVelGrid = pSourceVelHandle.deviceGrid<nanovdb::Vec3f>();
 
-			if (!densGrid || !velGrid) {
-				addError(SOP_MESSAGE, "No Valid grids found in the input geometry");
-				return error();
-			}
-		}
+			const nanovdb::FloatGrid* cpuHandle = sopcache->pDenHandle.grid<float>();
 
-		// Process grids:
-		const double dt = evalFloat("timestep", 0, now);
-
-		openvdb::FloatGrid::Ptr advectedDens = nullptr;
-		openvdb::GridBase::Ptr nanoToOpen = nullptr;
-
-		if (evalInt("GPU", 0, now)) {
-
-			nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> _Handle;
-
-			const auto& densityHandle = mNanoCache.getCachedDensityGrid(densGrid);
-
-			if (_Handle.empty()) {
-				_Handle = densityHandle.copy<nanovdb::CudaDeviceBuffer>();
-			}
-
-			cudaStream_t stream;
-			cudaStreamCreate(&stream);
-
-			{
-				ScopedTimer timer("Upload to GPU");
-				_Handle.deviceUpload(stream, false);
-				// velHandle.deviceUpload(stream, false);
-			}
-			nanovdb::FloatGrid* gpuDenHandle = _Handle.deviceGrid<float>();
-			// const nanovdb::Vec3fGrid* GpuVelHandle = velHandle.deviceGrid<nanovdb::Vec3f>();
-
-			if (!gpuDenHandle) {
-				addError(SOP_MESSAGE, "GridHandle did not contain the expected grid with value type float/Vec3f");
-				return error();
-			}
-
-			const nanovdb::FloatGrid* cpuHandle = _Handle.grid<float>();
-
-			// Ensure the grid supports sequential access to leaf nodes
 			if (!cpuHandle->isSequential<0>()) {
-				addError(SOP_MESSAGE, "Grid does not support sequential access to leaf nodes!");
-				return error();
+				cookparms.sopAddError(SOP_MESSAGE, "Grid does not support sequential access to leaf nodes!");
+				return;
 			}
 
-			const auto leafCount = cpuHandle->tree().nodeCount(0);
-			const auto voxelSize = cpuHandle->voxelSize()[0];
-
-			// Launch kernels asynchronously
-			// launch_kernels(gpuDenHandle, GpuVelHandle, leafCount, voxelSize, dt, stream);
+			if (!gpuDenGrid || !gpuVelGrid) {
+				cookparms.sopAddError(SOP_MESSAGE,
+				                      "GridHandle did not contain the expected grid with value type float/Vec3f");
+				return;
+			}
 
 			{
 				ScopedTimer timer("Kernel");
-				scaleActiveVoxels(gpuDenHandle, leafCount, dt);
-			}
-
-			{
-				ScopedTimer timer("Download from GPU");
-				_Handle.deviceDownload(stream, false);
-			}
-
-			// Destroy the CUDA stream
-			cudaStreamDestroy(stream);
-
-			{
-				ScopedTimer timer("Convert to OpenVDB");
-				nanoToOpen = nanovdb::nanoToOpenVDB(_Handle);
-			}
-
-			mNanoCache.swap(_Handle);
-
-		} else {
-			advectedDens = advect<openvdb::FloatGrid>(densGrid, velGrid, dt);
-
-			if (!advectedDens) {
-				addError(SOP_MESSAGE, "Failed to advect density grid");
-				return error();
+				const auto leafCount = cpuHandle->tree().nodeCount(0);
+				const auto voxelSize = cpuHandle->voxelSize()[0];
+				const double dt = sopparms.getTimestep();
+				launch_kernels(gpuDenGrid, gpuVelGrid, leafCount, voxelSize, dt, sopcache->pStream);
 			}
 		}
 
-		gdp->clearAndDestroy();
+		{
+			ScopedTimer timer("Download from GPU");
+			sopcache->pDenHandle.deviceDownload(sopcache->pStream, false);
+		}
 
-		// Create new VDB primitives from the advected grids
-		if (evalInt("GPU", 0, now)) {
-			ScopedTimer timer("Create VDB grid");
+		detail->clearAndDestroy();
+
+		{
+			ScopedTimer timer("Convert to OpenVDB and Create VDB grid");
+			const openvdb::GridBase::Ptr nanoToOpen = nanovdb::nanoToOpenVDB(sopcache->pDenHandle);
 			const openvdb::FloatGrid::Ptr out = openvdb::gridPtrCast<openvdb::FloatGrid>(nanoToOpen);
-			GU_PrimVDB::buildFromGrid(*gdp, out, nullptr, "density");
-		} else {
-			GU_PrimVDB::buildFromGrid(*gdp, advectedDens, nullptr, "density");
+			GU_PrimVDB::buildFromGrid(*detail, out, nullptr, "density");
 		}
-
-
-		boss.end();
-	} catch (std::exception& e) {
-		addError(SOP_MESSAGE, e.what());
-		return error();
 	}
-
-	return error();
-}
-
-
-template <typename GridType>
-typename GridType::ConstPtr SOP_VdbSolver::Cache::processGrid(const GridCPtr& in) {
-	try {
-		typename GridType::ConstPtr transformed = openvdb::gridConstPtrCast<GridType>(in);
-
-		if (!transformed) {
-			addError(SOP_MESSAGE, "Input grid is not of the expected type");
-			return nullptr;
-		}
-
-		return transformed;
-
-	} catch (std::exception& e) {
-		addError(SOP_MESSAGE, e.what());
-		return nullptr;
-	}
-}
-
-template <typename GridType>
-typename GridType::Ptr SOP_VdbSolver::Cache::advect(const openvdb::FloatGrid::ConstPtr& grid,
-                                                    const openvdb::VectorGrid::ConstPtr& velocity, const double dt) {
-	HoudiniInterrupter boss("Advecting grid...");
-	boss.start();
-
-	openvdb::tools::VolumeAdvection<openvdb::VectorGrid> advectOp(*velocity);
-
-	// Use BoxSampler explicitly
-	auto result = advectOp.advect<GridType, openvdb::tools::BoxSampler>(*grid, dt);
 
 	boss.end();
-
-	return result;
 }
