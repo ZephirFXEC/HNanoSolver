@@ -14,18 +14,15 @@
 
 using namespace VdbSolver;
 
-extern "C" void launch_kernels(nanovdb::FloatGrid*, nanovdb::Vec3fGrid*, int, float, float, cudaStream_t stream);
+extern "C" void kernel(nanovdb::FloatGrid*, nanovdb::Vec3fGrid*, int, float, float, cudaStream_t stream);
+extern "C" void thrust_kernel(nanovdb::FloatGrid*, nanovdb::Vec3fGrid*, int, float, float, cudaStream_t stream);
 
 extern "C" void scaleActiveVoxels(nanovdb::FloatGrid*, uint64_t, float);
 
-class SOP_VdbSolverCache : public SOP_NodeCache {
+class SOP_VdbSolverCache final : public SOP_NodeCache {
    public:
 	SOP_VdbSolverCache() : SOP_NodeCache() {}
 	~SOP_VdbSolverCache() override {
-		if (pStream) {
-			cudaStreamDestroy(pStream);
-		}
-
 		if(!pDenHandle.isEmpty()) {
 			pDenHandle.reset();
 		}
@@ -35,12 +32,11 @@ class SOP_VdbSolverCache : public SOP_NodeCache {
 		}
 	}
 
-	cudaStream_t pStream = nullptr;
 	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pDenHandle;
 	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pVelHandle;
 };
 
-class SOP_VdbSolverVerb : public SOP_NodeVerb {
+class SOP_VdbSolverVerb final : public SOP_NodeVerb {
    public:
 	SOP_VdbSolverVerb() = default;
 	~SOP_VdbSolverVerb() override = default;
@@ -72,9 +68,9 @@ const char* const SOP_VdbSolverVerb::theDsFile = R"THEDSFILE(
 {
     name        parameters
     parm {
-        name    "gpu"
-		label	"GPU"
-        label   "Runs on the GPU"
+        name    "advection"
+		label	"Advection"
+        label   "Run the advection kernel"
         type    toggle
         default { "1" }
     }
@@ -122,8 +118,8 @@ const SOP_NodeVerb* SOP_VdbSolver::cookVerb() const { return SOP_VdbSolverVerb::
 
 
 void SOP_VdbSolverVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
-	auto&& sopparms = cookparms.parms<SOP_VDBSolverParms>();
-	auto sopcache = dynamic_cast<SOP_VdbSolverCache*>(cookparms.cache());
+	const auto& sopparms = cookparms.parms<SOP_VDBSolverParms>();
+	const auto sopcache = dynamic_cast<SOP_VdbSolverCache*>(cookparms.cache());
 
 	openvdb_houdini::HoudiniInterrupter boss("Computing VDB grids");
 
@@ -171,45 +167,29 @@ void SOP_VdbSolverVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
 
 
 	if (sopparms.getGpu()) {
-		{  // Init class members
-			if (!sopcache->pStream) {
-				cudaStreamCreate(&sopcache->pStream);
-			}
 
-			if (sopcache->pDenHandle.isEmpty()) {
+		cudaStream_t stream;
+		cudaStreamCreate(&stream);
+
+		{  // Init class members
+			{
 				ScopedTimer timer("Convert to NanoVDB and Upload Density to GPU");
 				sopcache->pDenHandle =
 				    nanovdb::createNanoGrid<openvdb::FloatGrid, float, nanovdb::CudaDeviceBuffer>(*densGrid);
-				sopcache->pDenHandle.deviceUpload(sopcache->pStream, false);
+				sopcache->pDenHandle.deviceUpload(stream, false);
 			}
 
-			if (sopcache->pVelHandle.isEmpty()) {
+			{
 				ScopedTimer timer("Convert to NanoVDB and Upload Velocity to GPU");
 				sopcache->pVelHandle =
 				    nanovdb::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::CudaDeviceBuffer>(*velGrid);
-				sopcache->pVelHandle.deviceUpload(sopcache->pStream, false);
+				sopcache->pVelHandle.deviceUpload(stream, false);
 			}
 		}
 
-		nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pSourceDenHandle;
-		nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pSourceVelHandle;
-
-		{  // Init sourcing
-			pSourceDenHandle = nanovdb::createNanoGrid<openvdb::FloatGrid, float, nanovdb::CudaDeviceBuffer>(*densGrid);
-			pSourceDenHandle.deviceUpload(sopcache->pStream, false);
-
-			pSourceVelHandle =
-			    nanovdb::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::CudaDeviceBuffer>(*velGrid);
-			pSourceVelHandle.deviceUpload(sopcache->pStream, false);
-		}
-
-
 		{
 			nanovdb::FloatGrid* gpuDenGrid = sopcache->pDenHandle.deviceGrid<float>();
-			nanovdb::FloatGrid* gpuSourceDenGrid = pSourceDenHandle.deviceGrid<float>();
-
 			nanovdb::Vec3fGrid* gpuVelGrid = sopcache->pVelHandle.deviceGrid<nanovdb::Vec3f>();
-			nanovdb::Vec3fGrid* gpuSourceVelGrid = pSourceVelHandle.deviceGrid<nanovdb::Vec3f>();
 
 			const nanovdb::FloatGrid* cpuHandle = sopcache->pDenHandle.grid<float>();
 
@@ -229,16 +209,16 @@ void SOP_VdbSolverVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
 				const auto leafCount = cpuHandle->tree().nodeCount(0);
 				const auto voxelSize = cpuHandle->voxelSize()[0];
 				const double dt = sopparms.getTimestep();
-				launch_kernels(gpuDenGrid, gpuVelGrid, leafCount, voxelSize, dt, sopcache->pStream);
+				thrust_kernel(gpuDenGrid, gpuVelGrid, leafCount, voxelSize, dt, stream);
 			}
 		}
 
 		{
 			ScopedTimer timer("Download from GPU");
-			sopcache->pDenHandle.deviceDownload(sopcache->pStream, false);
+			sopcache->pDenHandle.deviceDownload(stream, true);
 		}
 
-		detail->clearAndDestroy();
+		detail->clear();
 
 		{
 			ScopedTimer timer("Convert to OpenVDB and Create VDB grid");

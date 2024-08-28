@@ -1,16 +1,62 @@
+#include <cuda/std/__algorithm/clamp.h>
+#include <nanovdb/util/SampleFromVoxels.h>
 #include <thrust/for_each.h>
 #include <thrust/iterator/counting_iterator.h>
 
+#include <cuda/std/cmath>
 #include <nanovdb/util/cuda/CudaGridHandle.cuh>
 
-extern "C" void scaleActiveVoxels(nanovdb::FloatGrid *grid_d, const uint64_t leafCount, float scale) {
-	auto kernel = [grid_d, scale] __device__(const uint64_t n) {
-		auto *leaf_d =
-		    grid_d->tree().getFirstNode<0>() + (n >> 9);  // this only works if grid->isSequential<0>() == true
-		const int i = n & 511;
-		const float v = scale * leaf_d->getValue(i);
-		if (leaf_d->isActive(i)) {
-			leaf_d->setValueOnly(i, v);  // only possible execution divergence
+template <typename T>
+__device__ inline T lerp(T v0, T v1, T t) {
+	return fma(t, v1, fma(-t, v0, v0));
+}
+
+extern "C" void thrust_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const int leafCount,
+                              const float voxelSize, const float dt, cudaStream_t stream) {
+	auto kernel = [deviceGrid, velGrid, voxelSize, dt] __device__(const uint64_t n) {
+		auto& dtree = deviceGrid->tree();
+		auto& vtree = velGrid->tree();
+
+		auto* leaf_d = dtree.getFirstNode<0>() + (n >> 9);
+		const int i_d = n & 511;
+
+		auto* leaf_v = vtree.getFirstNode<0>() + (n >> 9);
+
+		const auto velAccessor = velGrid->getAccessor();
+		const auto denAccessor = deviceGrid->getAccessor();
+		const auto velSampler = nanovdb::createSampler<1>(velAccessor);
+		const auto denSampler = nanovdb::createSampler<1>(denAccessor);
+		if (leaf_v->isActive()) {
+			// Get the position of the voxel in index space
+			const nanovdb::Coord voxelCoord = leaf_d->offsetToGlobalCoord(i_d);
+			const nanovdb::Vec3f voxelCoordf = voxelCoord.asVec3s();
+			const float density = denSampler(voxelCoordf);
+
+			// Forward step
+			const nanovdb::Vec3f forward_pos = voxelCoordf - velSampler(voxelCoordf) * (dt / voxelSize);
+			const float d_forward = denSampler(forward_pos);
+
+			// Backward step
+			const nanovdb::Vec3f back_pos = voxelCoordf + velSampler(forward_pos) * (dt / voxelSize);
+			const float d_backward = denSampler(back_pos);
+
+			// Error estimation and correction
+			const float error = 0.5f * (density - d_backward);
+			float d_corrected = d_forward + error;
+
+			// Limit the correction based on the neighborhood of the forward position
+			const float max_correction = 0.5f * cuda::std::fabs(d_forward - density);
+			d_corrected = cuda::std::clamp(d_corrected, d_forward - max_correction, d_forward + max_correction);
+
+			// Final advection (blend between semi-Lagrangian and BFECC result)
+			constexpr float blend_factor = 0.8f;  // Adjust this value between 0 and 1
+			float new_density = lerp(d_forward, d_corrected, blend_factor);
+
+			// Ensure non-negativity
+			new_density = cuda::std::fmax(0.0f, new_density);
+
+			// Set the new density value
+			leaf_d->setValue(voxelCoord, new_density);
 		}
 	};
 
