@@ -10,6 +10,66 @@ __device__ inline T lerp(T v0, T v1, T t) {
 	return fma(t, v1, fma(-t, v0, v0));
 }
 
+
+__global__ void vel_gpu_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid,
+                               const uint64_t leafCount, const float voxelSize, const float dt) {
+	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+	if (idx >= 512 * leafCount) return;
+
+	auto& dtree = deviceGrid->tree();
+	auto& vtree = velGrid->tree();
+
+	auto* leaf_d = dtree.getFirstNode<0>() + (idx >> 9);
+	const int i_d = idx & 511;
+
+	auto* leaf_v = vtree.getFirstNode<0>() + (idx >> 9);
+
+	const auto velAccessor = velGrid->getAccessor();
+	const auto velSampler = nanovdb::createSampler<1>(velAccessor);
+
+	if (leaf_v->isActive()) {
+		// Get the position of the voxel in index space
+		const nanovdb::Coord voxelCoord = leaf_v->offsetToGlobalCoord(i_d);
+		const nanovdb::Vec3f voxelCoordf = voxelCoord.asVec3s();
+		const nanovdb::Vec3f velocity = velSampler(voxelCoordf);
+
+		// Forward step
+		const nanovdb::Vec3f forward_pos = voxelCoordf - velocity * (dt / voxelSize);
+		const nanovdb::Vec3f v_forward = velSampler(forward_pos);
+
+		// Backward step
+		const nanovdb::Vec3f back_pos = voxelCoordf + velSampler(forward_pos) * (dt / voxelSize);
+		const nanovdb::Vec3f v_backward = velSampler(back_pos);
+
+		// Error estimation and correction
+		const nanovdb::Vec3f error = 0.5f * (velocity - v_backward);
+		nanovdb::Vec3f v_corrected = v_forward + error;
+
+		// Limit the correction based on the neighborhood of the forward position
+		const auto max_correction = nanovdb::Vec3f(cuda::std::abs(0.5f * (v_forward[0] - velocity[0])),
+		                                           cuda::std::abs(0.5f * (v_forward[1] - velocity[1])),
+		                                           cuda::std::abs(0.5f * (v_forward[2] - velocity[2])));
+		v_corrected[0] =
+		    cuda::std::clamp(v_corrected[0], v_forward[0] - max_correction[0], v_forward[0] + max_correction[0]);
+		v_corrected[1] =
+		    cuda::std::clamp(v_corrected[1], v_forward[1] - max_correction[1], v_forward[1] + max_correction[1]);
+		v_corrected[2] =
+		    cuda::std::clamp(v_corrected[2], v_forward[2] - max_correction[2], v_forward[2] + max_correction[2]);
+
+		// Final advection (blend between semi-Lagrangian and BFECC result)
+		constexpr float blend_factor = 0.8f;  // Adjust this value between 0 and 1
+		nanovdb::Vec3f new_velocity;
+		new_velocity[0] = lerp(v_forward[0], v_corrected[0], blend_factor);
+		new_velocity[1] = lerp(v_forward[1], v_corrected[1], blend_factor);
+		new_velocity[2] = lerp(v_forward[2], v_corrected[2], blend_factor);
+
+		// Set the new velocity value
+		leaf_d->setValue(voxelCoord, new_velocity);
+	}
+}
+
+
 __global__ void gpu_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const uint64_t leafCount,
                            const float voxelSize, const float dt) {
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -65,14 +125,27 @@ __global__ void gpu_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fG
 
 // This is called by the client code on the host
 extern "C" void kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const int leafCount,
-                               const float voxelSize, const float dt, cudaStream_t stream) {
+                       const float voxelSize, const float dt, cudaStream_t stream) {
 	// Calculate the total number of voxels to process
 	const uint64_t totalVoxels = 512 * leafCount;
 
 	// Define block size and grid size
-	int blockSize = 1024;                                      // Number of threads per block
+	int blockSize = 512;                                       // Number of threads per block
 	int gridSize = (totalVoxels + blockSize - 1) / blockSize;  // Number of blocks
 
 	// Launch the kernel
 	gpu_kernel<<<gridSize, blockSize, 0, stream>>>(deviceGrid, velGrid, leafCount, voxelSize, dt);
+}
+
+extern "C" void vel_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const int leafCount,
+                           const float voxelSize, const float dt, cudaStream_t stream) {
+	// Calculate the total number of voxels to process
+	const uint64_t totalVoxels = 512 * leafCount;
+
+	// Define block size and grid size
+	int blockSize = 512;                                       // Number of threads per block
+	int gridSize = (totalVoxels + blockSize - 1) / blockSize;  // Number of blocks
+
+	// Launch the kernel
+	vel_gpu_kernel<<<gridSize, blockSize, 0, stream>>>(deviceGrid, velGrid, leafCount, voxelSize, dt);
 }
