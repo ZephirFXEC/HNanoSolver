@@ -7,7 +7,6 @@ project(HNanoSolver LANGUAGES CXX CUDA)
 add_compile_definitions(
         SESI_OPENVDB
         NANOVDB_USE_OPENVDB
-        NANOVDB_USE_TBB
 )
 
 
@@ -25,29 +24,66 @@ list(APPEND CMAKE_PREFIX_PATH "$ENV{HFS}/toolkit/cmake" )
 find_package(Houdini REQUIRED)
 # ------- End Houdini -----------
 
-houdini_generate_proto_headers( FILES src/SOP_VDBSolver.cpp )
+houdini_generate_proto_headers( FILES
+        src/SOP/Solver/SOP_VDBSolver.cpp
+        src/SOP/ReadWrite/SOP_ReadWriteTest.cpp
+)
 
-
-add_library(${PROJECT_NAME} SHARED
-        src/SOP_VDBSolver.cpp
-        src/SOP_VDBSolver.hpp
+########################  Utils library ########################################################################
+add_library(Utils STATIC
         src/Utils/Utils.cpp
         src/Utils/Utils.hpp
         src/Utils/IncomingDataCache.hpp
         src/Utils/ScopedTimer.hpp
         src/Utils/CudaStreamWrapper.hpp
 )
-
-target_link_libraries(${PROJECT_NAME} PRIVATE
-        Kernels
+target_link_libraries(Utils PRIVATE
         Houdini
-       "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
+        "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
-
-target_include_directories(${PROJECT_NAME} PRIVATE
+target_include_directories(Utils PUBLIC
+        src
         ${CMAKE_CURRENT_BINARY_DIR}
         $ENV{HFS}/toolkit/include
 )
+########################################################################################################################
 
-# Sets several common target properties, such as the library's output directory.
-houdini_configure_target(${PROJECT_NAME} $ENV{DSO_Path})
+
+########################  SOP_VDBSolver library ########################################################################
+add_library(SOP_VDBSolver SHARED
+        src/SOP/Solver/SOP_VDBSolver.cpp
+        src/SOP/Solver/SOP_VDBSolver.hpp
+)
+target_link_libraries(SOP_VDBSolver PRIVATE
+        Utils
+        Kernels
+        Houdini
+        "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
+)
+target_include_directories(SOP_VDBSolver PRIVATE
+        src
+        ${CMAKE_CURRENT_BINARY_DIR}
+        $ENV{HFS}/toolkit/include
+)
+########################################################################################################################
+
+
+########################  SOP_ReadWriteTest library ####################################################################
+add_library(SOP_ReadWriteTest SHARED
+        src/SOP/ReadWrite/SOP_ReadWriteTest.cpp
+        src/SOP/ReadWrite/SOP_ReadWriteTest.hpp
+)
+target_link_libraries(SOP_ReadWriteTest PRIVATE
+        Utils
+        Kernels
+        Houdini
+        "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
+)
+target_include_directories(SOP_ReadWriteTest PRIVATE
+        src
+        ${CMAKE_CURRENT_BINARY_DIR}
+        $ENV{HFS}/toolkit/include
+)
+########################################################################################################################
+houdini_configure_target(SOP_ReadWriteTest $ENV{DSO_Path})
+houdini_configure_target(SOP_VDBSolver $ENV{DSO_Path})

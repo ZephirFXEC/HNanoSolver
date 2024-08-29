@@ -4,18 +4,19 @@
 
 #pragma once
 
-#include <chrono>
+#include <UT/UT_StopWatch.h>
 
 class ScopedTimer {
    public:
-	explicit ScopedTimer(const char* name) : name_(name), start_(std::chrono::system_clock::now()) {}
+	explicit ScopedTimer(const char* name) : name_(name) {
+		watch_.start();
+
+	}
 	~ScopedTimer() {
-		const auto end = std::chrono::system_clock::now();
-		std::printf("%s Time: %f ms\n", name_, std::chrono::duration<double>(end - start_).count() * 1000.0);
-		std::fflush(stdout);
+		std::printf("%s Time: %f ms\n", name_,  watch_.lap() * 1000.0);
 	}
 
    private:
 	const char* name_;
-	const std::chrono::time_point<std::chrono::system_clock> start_;
+	UT_StopWatch watch_;
 };
