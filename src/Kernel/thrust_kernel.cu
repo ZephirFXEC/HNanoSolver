@@ -12,17 +12,33 @@ __device__ inline T lerp(T v0, T v1, T t) {
 	return fma(t, v1, fma(-t, v0, v0));
 }
 
+template <typename Func, typename... Args>
+__global__ void lambdaKernel(const size_t numItems, Func func, Args... args) {
+	const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+	if (tid >= numItems) return;
+	func(tid, args...);
+}
+
+inline size_t blocksPerGrid(const size_t numItems, const size_t threadsPerBlock) {
+	NANOVDB_ASSERT(numItems > 0 && threadsPerBlock >= 32 && threadsPerBlock % 32 == 0);
+	return (numItems + threadsPerBlock - 1) / threadsPerBlock;
+}
 
 extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid,
                                   const uint64_t leafCount, const float voxelSize, const float dt) {
-	auto kernel = [deviceGrid, velGrid, voxelSize, dt] __device__(const uint64_t n) {
+	constexpr unsigned int numThreads = 128;
+	const unsigned int numVoxels = 512 * leafCount;
+	const unsigned int numBlocks = blocksPerGrid(numVoxels, numThreads);
+
+	lambdaKernel<<<numBlocks, numThreads>>>(numVoxels, [deviceGrid, velGrid, voxelSize,
+	                                                    dt] __device__(const uint64_t n) {
 		auto& dtree = deviceGrid->tree();
-		auto& vtree = velGrid->tree();
+		const auto& vtree = velGrid->tree();
 
 		auto* leaf_d = dtree.getFirstNode<0>() + (n >> 9);
 		const int i_d = n & 511;
 
-		auto* leaf_v = vtree.getFirstNode<0>() + (n >> 9);
+		const auto* leaf_v = vtree.getFirstNode<0>() + (n >> 9);
 
 		const auto velAccessor = velGrid->getAccessor();
 		const auto velSampler = nanovdb::createSampler<1>(velAccessor);
@@ -66,15 +82,18 @@ extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb:
 			// Set the new velocity value
 			leaf_d->setValue(voxelCoord, new_velocity);
 		}
-	};
-
-	const thrust::counting_iterator<uint64_t, thrust::device_system_tag> iter(0);
-	thrust::for_each(iter, iter + 512 * leafCount, kernel);
+	});
 }
 
 extern "C" void thrust_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const int leafCount,
                               const float voxelSize, const float dt) {
-	auto kernel = [deviceGrid, velGrid, voxelSize, dt] __device__(const uint64_t n) {
+	constexpr unsigned int numThreads = 128;
+	const unsigned int numVoxels = 512 * leafCount;
+	const unsigned int numBlocks = blocksPerGrid(numVoxels, numThreads);
+
+
+	//TODO: Race condition Read-Write on deviceGrid
+	lambdaKernel<<<numBlocks, numThreads>>>(numVoxels, [deviceGrid, velGrid, voxelSize, dt] __device__(const size_t n) {
 		auto& dtree = deviceGrid->tree();
 		auto& vtree = velGrid->tree();
 
@@ -120,8 +139,6 @@ extern "C" void thrust_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec
 			// Set the new density value
 			leaf_d->setValue(voxelCoord, new_density);
 		}
-	};
-
-	const thrust::counting_iterator<uint64_t, thrust::device_system_tag> iter(0);
-	thrust::for_each(iter, iter + 512 * leafCount, kernel);
+	});
+	cudaCheckError();
 }
