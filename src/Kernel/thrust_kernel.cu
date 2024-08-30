@@ -26,7 +26,7 @@ inline size_t blocksPerGrid(const size_t numItems, const size_t threadsPerBlock)
 
 extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid,
                                   const uint64_t leafCount, const float voxelSize, const float dt) {
-	constexpr unsigned int numThreads = 128;
+	constexpr unsigned int numThreads = 256;
 	const unsigned int numVoxels = 512 * leafCount;
 	const unsigned int numBlocks = blocksPerGrid(numVoxels, numThreads);
 
@@ -87,12 +87,13 @@ extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb:
 
 extern "C" void thrust_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const int leafCount,
                               const float voxelSize, const float dt) {
-	constexpr unsigned int numThreads = 128;
+	constexpr unsigned int numThreads = 256;
 	const unsigned int numVoxels = 512 * leafCount;
 	const unsigned int numBlocks = blocksPerGrid(numVoxels, numThreads);
 
 
-	//TODO: Race condition Read-Write on deviceGrid
+	// TODO: Race condition Read-Write on deviceGrid
+	// Somehow make a deep copy to have a readDeviceGrid and writeDeviceGrid
 	lambdaKernel<<<numBlocks, numThreads>>>(numVoxels, [deviceGrid, velGrid, voxelSize, dt] __device__(const size_t n) {
 		auto& dtree = deviceGrid->tree();
 		auto& vtree = velGrid->tree();
