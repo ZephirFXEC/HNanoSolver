@@ -1,28 +1,10 @@
-#include <cuda/std/__algorithm/clamp.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/SampleFromVoxels.h>
-#include <thrust/for_each.h>
-#include <thrust/iterator/counting_iterator.h>
 
 #include <cuda/std/cmath>
-#include <nanovdb/util/cuda/CudaGridHandle.cuh>
+#include <cuda/std/__algorithm/clamp.h>
 
-template <typename T>
-__device__ inline T lerp(T v0, T v1, T t) {
-	return fma(t, v1, fma(-t, v0, v0));
-}
-
-template <typename Func, typename... Args>
-__global__ void lambdaKernel(const size_t numItems, Func func, Args... args) {
-	const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-	if (tid >= numItems) return;
-	func(tid, args...);
-}
-
-inline size_t blocksPerGrid(const size_t numItems, const size_t threadsPerBlock) {
-	NANOVDB_ASSERT(numItems > 0 && threadsPerBlock >= 32 && threadsPerBlock % 32 == 0);
-	return (numItems + threadsPerBlock - 1) / threadsPerBlock;
-}
+#include "utils.cuh"
 
 extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid,
                                   const uint64_t leafCount, const float voxelSize, const float dt) {

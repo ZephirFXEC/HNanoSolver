@@ -5,15 +5,25 @@
 #include "SOP_ReadWriteTest.hpp"
 
 #include <UT/UT_DSOVersion.h>
+#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
 
 #include <vector>
 
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
 
+extern "C" void pointToGrid(const Grid& gridData, nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>&);
+
 const char* const SOP_ReadWriteTestVerb::theDsFile = R"THEDSFILE(
 {
     name        parameters
+	parm {
+		name "voxelsize"
+		label "Voxel Size"
+        type    float
+        size    1
+        default { "0.5" }
+	}
 }
 )THEDSFILE";
 
@@ -35,7 +45,7 @@ const SOP_NodeVerb* SOP_ReadWriteTest::cookVerb() const { return SOP_ReadWriteTe
 
 void SOP_ReadWriteTestVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
 	openvdb_houdini::HoudiniInterrupter boss("Computing VDB grids");
-
+	const auto& sopparms = cookparms.parms<SOP_ReadWriteTestParms>();
 	GU_Detail* detail = cookparms.gdh().gdpNC();
 	const GEO_Detail* const in_geo = cookparms.inputGeo(0);
 
@@ -43,6 +53,59 @@ void SOP_ReadWriteTestVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const
 		cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
 	}
 
+
+	// Try with a float
+	const GA_ROHandleF attrib(detail->findFloatTuple(GA_ATTRIB_POINT, "density"));
+	if(!attrib.isValid()) {
+		cookparms.sopAddError(SOP_MESSAGE, "No density attribute found");
+	}
+
+	std::vector<nanovdb::Coord> coords;
+	std::vector<float> values;
+
+	{
+		ScopedTimer timer("Extracting points");
+		GA_Offset ptoff;
+		GA_FOR_ALL_PTOFF(in_geo, ptoff) {
+			UT_Vector3F pos = in_geo->getPos3(ptoff);
+			float value = attrib.get(ptoff);
+			coords.emplace_back(pos[0], pos[1], pos[2]);
+			values.push_back(value);
+		}
+	}
+
+	const Grid data = {coords, values, static_cast<float>(sopparms.getVoxelsize())};
+
+	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> handle;
+	{
+		const auto name = "Create NanoVDB Grid from points";
+		boss.start(name);
+		ScopedTimer timer(name);
+		pointToGrid(data, handle);
+		boss.end();
+	}
+
+	if(handle.isEmpty()) {
+		cookparms.sopAddError(SOP_MESSAGE, "Failed to create grid");
+	}
+
+	handle.deviceDownload();
+	detail->clearAndDestroy();
+
+	{
+		const auto name = "Create VDB Grid from NanoVDB Grid";
+		boss.start(name);
+		ScopedTimer timer(name);
+		const auto grid = nanovdb::nanoToOpenVDB(handle);
+		const openvdb::FloatGrid::Ptr vdbGrid = openvdb::gridPtrCast<openvdb::FloatGrid>(grid);
+		GU_PrimVDB::buildFromGrid(*detail, vdbGrid, nullptr, "density");
+		boss.end();
+	}
+
+}
+
+void LoadVDBs(const SOP_NodeVerb::CookParms& cookparms, openvdb_houdini::HoudiniInterrupter& boss,
+              const GEO_Detail* const in_geo) {
 	std::vector<GU_PrimVDB*> prims;
 
 	for (openvdb_houdini::VdbPrimIterator it(in_geo); it; ++it) {
@@ -50,7 +113,6 @@ void SOP_ReadWriteTestVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const
 			throw std::runtime_error("processing was interrupted");
 		}
 		prims.push_back(it.getPrimitive());
-		printf("Found VDB prim %s\n", it.getPrimitive()->getGridPtr()->getName().c_str());
 	}
 
 	if (prims.empty()) {

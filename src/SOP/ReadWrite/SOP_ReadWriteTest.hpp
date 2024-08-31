@@ -14,6 +14,12 @@
 
 #include "SOP_ReadWriteTest.proto.h"
 
+struct Grid {
+	std::vector<nanovdb::Coord> coords{};
+	std::vector<float> values{};
+	float voxelSize = 0.5f;
+};
+
 class SOP_ReadWriteTest final : public SOP_Node {
    public:
 	SOP_ReadWriteTest(OP_Network* net, const char* name, OP_Operator* op) : SOP_Node(net, name, op) {
