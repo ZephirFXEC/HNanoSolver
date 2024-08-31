@@ -21,3 +21,8 @@ For a simple simulation with a Density grid and Velocity grid with 6M active vox
 - Clone the repo : `git pull https://github.com/ZephirFXEC/HNanoSolver.git`
 - Create a build directory : `cd HNanoSolver && mkdir build && cd build`
 - Build using cmake : `cmake .. -G "Visual Studio 17 2022" -T "v142"`
+
+# Reference
+## Papers 
+- Bridson, R., Muller-Fischer, M. (2007). FLUID SIMULATION SIGGRAPH 2007 Course notes. SIGGRAPH. [this](https://www.cs.ubc.ca/~rbridson/fluidsimulation/fluids_notes.pdf)
+  
