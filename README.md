@@ -1,5 +1,7 @@
 # HNanoSolver
 > This is a project used to learn Fluid Dynamics and GPU acceleration through Cuda.
+- **HNanoAdvect**, advect any float / vector fields on the GPU
+- **HNanoGridBuilder**, generate a VDB from points on the GPU (**10x** faster than VDB From Particle) 
 
 # DFD : 
 ![image](https://github.com/user-attachments/assets/2a453b9c-edbc-4487-b3fd-368d56098b4d)
