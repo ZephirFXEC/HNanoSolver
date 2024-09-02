@@ -5,9 +5,9 @@
 #include "SOP_ReadWriteTest.hpp"
 
 #include <UT/UT_DSOVersion.h>
-#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
-
+#include <GA/GA_SplittableRange.h>
 #include <vector>
+#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
 
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
@@ -63,15 +63,30 @@ void SOP_ReadWriteTestVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const
 	std::vector<nanovdb::Coord> coords;
 	std::vector<float> values;
 
-	{
+
+	{ // TODO: idk what I did there but without mutex it crashes
 		ScopedTimer timer("Extracting points");
-		GA_Offset ptoff;
-		GA_FOR_ALL_PTOFF(in_geo, ptoff) {
-			UT_Vector3F pos = in_geo->getPos3(ptoff);
-			float value = attrib.get(ptoff);
-			coords.emplace_back(pos[0], pos[1], pos[2]);
-			values.push_back(value);
-		}
+		std::mutex mutex;
+		UTparallelFor(GA_SplittableRange(in_geo->getPointRange()), [&](const GA_Range& range) {
+			// Thread-local storage for each thread
+			std::vector<nanovdb::Coord> local_coords;
+			std::vector<float> local_values;
+
+			for(GA_Iterator it(range); !it.atEnd(); ++it)
+			{
+				UT_Vector3F pos = in_geo->getPos3(it.getOffset());
+				float value = attrib.get(it.getOffset());
+				local_coords.emplace_back(pos[0], pos[1], pos[2]);
+				local_values.push_back(value);
+			}
+
+			// Lock and append local results to shared vectors
+			{
+				std::lock_guard<std::mutex> lock(mutex);
+				coords.insert(coords.end(), local_coords.begin(), local_coords.end());
+				values.insert(values.end(), local_values.begin(), local_values.end());
+			}
+		});
 	}
 
 	const Grid data = {coords, values, static_cast<float>(sopparms.getVoxelsize())};

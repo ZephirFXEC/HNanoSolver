@@ -7,12 +7,12 @@
 #include "utils.cuh"
 
 extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid,
-                                  const uint64_t leafCount, const float voxelSize, const float dt) {
+                                  const uint64_t leafCount, const float voxelSize, const float dt, cudaStream_t stream) {
 	constexpr unsigned int numThreads = 256;
 	const unsigned int numVoxels = 512 * leafCount;
 	const unsigned int numBlocks = blocksPerGrid(numVoxels, numThreads);
 
-	lambdaKernel<<<numBlocks, numThreads>>>(numVoxels, [deviceGrid, velGrid, voxelSize,
+	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(numVoxels, [deviceGrid, velGrid, voxelSize,
 	                                                    dt] __device__(const uint64_t n) {
 		auto& dtree = deviceGrid->tree();
 		const auto& vtree = velGrid->tree();
@@ -67,8 +67,8 @@ extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb:
 	});
 }
 
-extern "C" void thrust_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const int leafCount,
-                              const float voxelSize, const float dt) {
+extern "C" void thrust_kernel(nanovdb::FloatGrid* tempGrid, nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const int leafCount,
+                              const float voxelSize, const float dt, cudaStream_t stream) {
 	constexpr unsigned int numThreads = 256;
 	const unsigned int numVoxels = 512 * leafCount;
 	const unsigned int numBlocks = blocksPerGrid(numVoxels, numThreads);
@@ -76,23 +76,24 @@ extern "C" void thrust_kernel(nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec
 
 	// TODO: Race condition Read-Write on deviceGrid
 	// Somehow make a deep copy to have a readDeviceGrid and writeDeviceGrid
-	lambdaKernel<<<numBlocks, numThreads>>>(numVoxels, [deviceGrid, velGrid, voxelSize, dt] __device__(const size_t n) {
+	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(numVoxels, [tempGrid, deviceGrid, velGrid, voxelSize, dt] __device__(const size_t n) {
 		auto& dtree = deviceGrid->tree();
 		auto& vtree = velGrid->tree();
+		auto& temp_tree = tempGrid->tree();
 
+		const auto* leaf_temp = temp_tree.getFirstNode<0>() + (n >> 9);
 		auto* leaf_d = dtree.getFirstNode<0>() + (n >> 9);
-		const int i_d = n & 511;
-
 		auto* leaf_v = vtree.getFirstNode<0>() + (n >> 9);
 
+		const int i_d = n & 511;
 		const auto velAccessor = velGrid->getAccessor();
-		const auto denAccessor = deviceGrid->getAccessor();
+		const auto denAccessor = tempGrid->getAccessor();
 		const auto velSampler = nanovdb::createSampler<1>(velAccessor);
 		const auto denSampler = nanovdb::createSampler<1>(denAccessor);
 
 		if (leaf_v->isActive()) {
 			// Get the position of the voxel in index space
-			const nanovdb::Coord voxelCoord = leaf_d->offsetToGlobalCoord(i_d);
+			const nanovdb::Coord voxelCoord = leaf_temp->offsetToGlobalCoord(i_d);
 			const nanovdb::Vec3f voxelCoordf = voxelCoord.asVec3s();
 			const float density = denSampler(voxelCoordf);
 

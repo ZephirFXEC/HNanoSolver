@@ -9,8 +9,9 @@
 
 using namespace VdbSolver;
 
-extern "C" void thrust_kernel(nanovdb::FloatGrid*, nanovdb::Vec3fGrid*, int, float, float);
-extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid*, const nanovdb::Vec3fGrid*, uint64_t, float, float);
+extern "C" void thrust_kernel(nanovdb::FloatGrid*, nanovdb::FloatGrid*, nanovdb::Vec3fGrid*, int, float, float,
+                              cudaStream_t);
+extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid*, const nanovdb::Vec3fGrid*, uint64_t, float, float, cudaStream_t);
 
 
 void newSopOperator(OP_OperatorTable* table) {
@@ -103,12 +104,11 @@ void SOP_VdbSolverVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
 			AGrid.push_back((*it)->getConstGridPtr());
 		}
 
-		{
-			for (openvdb_houdini::VdbPrimCIterator it(bgeo); it; ++it) {
-				if (boss.wasInterrupted()) break;
-				BGrid = openvdb::gridConstPtrCast<openvdb::VectorGrid>((*it)->getConstGridPtr());
-				if (BGrid) break;
-			}
+
+		for (openvdb_houdini::VdbPrimCIterator it(bgeo); it; ++it) {
+			if (boss.wasInterrupted()) break;
+			BGrid = openvdb::gridConstPtrCast<openvdb::VectorGrid>((*it)->getConstGridPtr());
+			if (BGrid) break;
 		}
 	}
 
@@ -127,46 +127,37 @@ void SOP_VdbSolverVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
 		}
 
 		{
-			{
-				ScopedTimer timer("Convert to NanoVDB and Upload Velocity to GPU");
-				sopcache->pBHandle =
-				    nanovdb::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::CudaDeviceBuffer>(
-				        *BGrid, nanovdb::StatsMode::Disable, nanovdb::ChecksumMode::Disable, 0);
-				sopcache->pBHandle.deviceUpload(stream, false);
-			}
+			convertAndUpload<openvdb::VectorGrid>(sopcache->pBHandle, BGrid, &stream);
 			nanovdb::Vec3fGrid* gpuBGrid = sopcache->pBHandle.deviceGrid<nanovdb::Vec3f>();
 
 			{
 				for (const auto& grid : floatGrids) {
-					{
-						ScopedTimer timer("Convert to NanoVDB and Upload GPU");
-						sopcache->pAHandle =
-						    nanovdb::createNanoGrid<openvdb::FloatGrid, float, nanovdb::CudaDeviceBuffer>(
-						        *grid, nanovdb::StatsMode::Disable, nanovdb::ChecksumMode::Disable, 0);
-						sopcache->pAHandle.deviceUpload(stream, false);
-					}
-
+					convertAndUpload<openvdb::FloatGrid>(sopcache->pAHandle, grid, &stream);
 					nanovdb::FloatGrid* gpuAGrid = sopcache->pAHandle.deviceGrid<float>();
 
-					const nanovdb::FloatGrid* cpuHandle = sopcache->pAHandle.grid<float>();
 
+					nanovdb::FloatGrid* tempGrid = nullptr;
+					{
+						ScopedTimer timer("Temp grid upload");
+						auto _temp = sopcache->pAHandle.copy<nanovdb::CudaDeviceBuffer>();
+						_temp.deviceUpload(stream, false);
+						tempGrid = _temp.deviceGrid<float>();
+					}
+
+
+					const nanovdb::FloatGrid* cpuHandle = sopcache->pAHandle.grid<float>();
 					if (!cpuHandle->isSequential<0>()) {
 						cookparms.sopAddError(SOP_MESSAGE, "Grid does not support sequential access to leaf nodes!");
 						return;
 					}
 
-					if (!gpuAGrid || !gpuBGrid) {
-						cookparms.sopAddError(
-						    SOP_MESSAGE, "GridHandle did not contain the expected grid with value type float/Vec3f");
-						return;
-					}
 
 					{
 						ScopedTimer timer("Kernel");
 						const auto leafCount = cpuHandle->tree().nodeCount(0);
 						const auto voxelSize = cpuHandle->voxelSize()[0];
 						const double dt = sopparms.getTimestep();
-						thrust_kernel(gpuAGrid, gpuBGrid, leafCount, voxelSize, dt);
+						thrust_kernel(tempGrid, gpuAGrid, gpuBGrid, leafCount, voxelSize, dt, stream);
 					}
 
 					{
@@ -186,13 +177,8 @@ void SOP_VdbSolverVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
 	} else {
 		const auto castedInputGrid = openvdb::gridConstPtrCast<openvdb::VectorGrid>(AGrid[0]);
 		{  // Init class members
-			{
-				ScopedTimer timer("Convert Velocity Grid to NanoVDB");
-				sopcache->pAHandle =
-				    nanovdb::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::CudaDeviceBuffer>(
-				        *castedInputGrid, nanovdb::StatsMode::Disable, nanovdb::ChecksumMode::Disable, 0);
-				sopcache->pAHandle.deviceUpload(stream, false);
-			}
+
+			convertAndUpload<openvdb::VectorGrid>(sopcache->pAHandle, BGrid, &stream);
 
 			{
 				ScopedTimer timer("Copy Velocity Grid to Temp Grid");
@@ -211,18 +197,12 @@ void SOP_VdbSolverVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
 			return;
 		}
 
-		if (!gpuAGrid || !gpuBGrid) {
-			cookparms.sopAddError(SOP_MESSAGE,
-			                      "GridHandle did not contain the expected grid with value type float/Vec3f");
-			return;
-		}
-
 		{
 			ScopedTimer timer("Kernel");
 			const auto leafCount = cpuHandle->tree().nodeCount(0);
 			const auto voxelSize = cpuHandle->voxelSize()[0];
 			const double dt = sopparms.getTimestep();
-			vel_thrust_kernel(gpuAGrid, gpuBGrid, leafCount, voxelSize, dt);
+			vel_thrust_kernel(gpuAGrid, gpuBGrid, leafCount, voxelSize, dt, stream);
 		}
 
 		{
@@ -231,9 +211,11 @@ void SOP_VdbSolverVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
 		}
 
 		{
-			ScopedTimer timer("Convert to OpenVDB and Create VDB grid");
+			ScopedTimer timer("Convert to OpenVDB");
 			const openvdb::GridBase::Ptr nanoToOpen = nanovdb::nanoToOpenVDB(sopcache->pAHandle);
 			const openvdb::VectorGrid::Ptr out = openvdb::gridPtrCast<openvdb::VectorGrid>(nanoToOpen);
+
+			ScopedTimer timer2("Create VDB grid");
 			GU_PrimVDB::buildFromGrid(*detail, out, nullptr, "vel");
 		}
 	}
@@ -242,4 +224,25 @@ void SOP_VdbSolverVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
 	printf("----------------------------------------------------\n");
 
 	boss.end();
+}
+
+template <typename GridT>
+void SOP_VdbSolverVerb::convertAndUpload(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle,
+                                         const typename GridT::ConstPtr& grid, const cudaStream_t* const stream) const {
+	ScopedTimer timer("Convert to NanoVDB and Upload to GPU");
+	if constexpr (std::is_same_v<GridT, openvdb::FloatGrid>) {
+		handle = nanovdb::createNanoGrid<openvdb::FloatGrid, float, nanovdb::CudaDeviceBuffer>(
+		    *grid, nanovdb::StatsMode::Disable, nanovdb::ChecksumMode::Disable, 0);
+	}
+
+	if constexpr (std::is_same_v<GridT, openvdb::VectorGrid>) {
+		handle = nanovdb::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::CudaDeviceBuffer>(
+		    *grid, nanovdb::StatsMode::Disable, nanovdb::ChecksumMode::Disable, 0);
+	}
+
+	if (!handle.isEmpty()) {
+		handle.deviceUpload(*stream, false);
+	} else {
+		printf("Failed to Convert and Upload grid\n");
+	}
 }

@@ -70,12 +70,26 @@ class SOP_VdbSolverVerb final : public SOP_NodeVerb {
 
 	SOP_NodeVerb::CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_DUPLICATE; }
 
+	template <typename GridT>
+	void convertAndUpload(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const typename GridT::ConstPtr& grid,
+	                      const cudaStream_t* stream) const;
+
 	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
 
 	static const SOP_NodeVerb::Register<SOP_VdbSolverVerb> theVerb;
 
 	static const char* const theDsFile;
 };
+
+template <typename GridT>
+struct KernelData {
+	GridT* _temp_grid;
+	GridT* output_grid;
+	nanovdb::Vec3fGrid* velocity_grid;
+	float voxel_size;
+	float dt;
+};
+
 }  // namespace VdbSolver
 
 #endif  // __SOP_VDBSOLVER_HPP__
