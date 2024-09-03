@@ -12,7 +12,7 @@
 #include <nanovdb/util/CreateNanoGrid.h>
 #include <nanovdb/util/NanoToOpenVDB.h>
 
-#include "SOP_ReadWriteTest.proto.h"
+#include "SOP_VDBFromGrid.proto.h"
 
 struct Grid {
 	std::vector<nanovdb::Coord> coords{};
@@ -20,18 +20,18 @@ struct Grid {
 	float voxelSize = 0.5f;
 };
 
-class SOP_ReadWriteTest final : public SOP_Node {
+class SOP_HNanoVDBFromGrid final : public SOP_Node {
    public:
-	SOP_ReadWriteTest(OP_Network* net, const char* name, OP_Operator* op) : SOP_Node(net, name, op) {
+	SOP_HNanoVDBFromGrid(OP_Network* net, const char* name, OP_Operator* op) : SOP_Node(net, name, op) {
 		mySopFlags.setManagesDataIDs(true);
 	}
 
-	~SOP_ReadWriteTest() override = default;
+	~SOP_HNanoVDBFromGrid() override = default;
 
 	static PRM_Template* buildTemplates();
 
 	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) {
-		return new SOP_ReadWriteTest(net, name, op);
+		return new SOP_HNanoVDBFromGrid(net, name, op);
 	}
 
 	OP_ERROR cookMySop(OP_Context& context) override { return cookMyselfAsVerb(context); }
@@ -49,25 +49,25 @@ class SOP_ReadWriteTest final : public SOP_Node {
 	}
 };
 
-class SOP_ReadWriteTestCache final : public SOP_NodeCache {
+class SOP_HNanoVDBFromGridCache final : public SOP_NodeCache {
    public:
-	SOP_ReadWriteTestCache() : SOP_NodeCache() {}
-	~SOP_ReadWriteTestCache() override = default;
+	SOP_HNanoVDBFromGridCache() : SOP_NodeCache() {}
+	~SOP_HNanoVDBFromGridCache() override = default;
 };
 
-class SOP_ReadWriteTestVerb final : public SOP_NodeVerb {
+class SOP_HNanoVDBFromGridVerb final : public SOP_NodeVerb {
    public:
-	SOP_ReadWriteTestVerb() = default;
-	~SOP_ReadWriteTestVerb() override = default;
-	[[nodiscard]] SOP_NodeParms* allocParms() const override { return new SOP_ReadWriteTestParms; }
-	[[nodiscard]] SOP_NodeCache* allocCache() const override { return new SOP_ReadWriteTestCache(); }
-	[[nodiscard]] UT_StringHolder name() const override { return "HReadWrite"; }
+	SOP_HNanoVDBFromGridVerb() = default;
+	~SOP_HNanoVDBFromGridVerb() override = default;
+	[[nodiscard]] SOP_NodeParms* allocParms() const override { return new SOP_VDBFromGridParms; }
+	[[nodiscard]] SOP_NodeCache* allocCache() const override { return new SOP_HNanoVDBFromGridCache(); }
+	[[nodiscard]] UT_StringHolder name() const override { return "HNanoFromGrid"; }
 
-	SOP_NodeVerb::CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_GENERATOR; }
+	SOP_NodeVerb::CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_DUPLICATE; }
 
 	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
 
-	static const SOP_NodeVerb::Register<SOP_ReadWriteTestVerb> theVerb;
+	static const SOP_NodeVerb::Register<SOP_HNanoVDBFromGridVerb> theVerb;
 	static const char* const theDsFile;
 };
 

@@ -2,19 +2,20 @@
 // Created by zphrfx on 29/08/2024.
 //
 
-#include "SOP_ReadWriteTest.hpp"
+#include "SOP_VDBFromGrid.hpp"
 
-#include <UT/UT_DSOVersion.h>
 #include <GA/GA_SplittableRange.h>
-#include <vector>
+#include <UT/UT_DSOVersion.h>
 #include <nanovdb/util/cuda/CudaDeviceBuffer.h>
+
+#include <vector>
 
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
 
 extern "C" void pointToGrid(const Grid& gridData, nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>&);
 
-const char* const SOP_ReadWriteTestVerb::theDsFile = R"THEDSFILE(
+const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 {
     name        parameters
 	parm {
@@ -27,25 +28,25 @@ const char* const SOP_ReadWriteTestVerb::theDsFile = R"THEDSFILE(
 }
 )THEDSFILE";
 
-PRM_Template* SOP_ReadWriteTest::buildTemplates() {
-	static PRM_TemplateBuilder templ("SOP_VDBSolver.cpp", SOP_ReadWriteTestVerb::theDsFile);
+PRM_Template* SOP_HNanoVDBFromGrid::buildTemplates() {
+	static PRM_TemplateBuilder templ("SOP_VDBFromGrid.cpp", SOP_HNanoVDBFromGridVerb::theDsFile);
 	return templ.templates();
 }
 
 void newSopOperator(OP_OperatorTable* table) {
-	table->addOperator(new OP_Operator("hreadwrite", "HReadWrite", SOP_ReadWriteTest::myConstructor,
-	                                   SOP_ReadWriteTest::buildTemplates(), 1, 1, nullptr, OP_FLAG_GENERATOR));
+	table->addOperator(new OP_Operator("hnanofromgrid", "HNanoFromGrid", SOP_HNanoVDBFromGrid::myConstructor,
+	                                   SOP_HNanoVDBFromGrid::buildTemplates(), 1, 1, nullptr, 0));
 }
 
 
-const SOP_NodeVerb::Register<SOP_ReadWriteTestVerb> SOP_ReadWriteTestVerb::theVerb;
+const SOP_NodeVerb::Register<SOP_HNanoVDBFromGridVerb> SOP_HNanoVDBFromGridVerb::theVerb;
 
-const SOP_NodeVerb* SOP_ReadWriteTest::cookVerb() const { return SOP_ReadWriteTestVerb::theVerb.get(); }
+const SOP_NodeVerb* SOP_HNanoVDBFromGrid::cookVerb() const { return SOP_HNanoVDBFromGridVerb::theVerb.get(); }
 
 
-void SOP_ReadWriteTestVerb::cook(const CookParms& cookparms) const {
+void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	openvdb_houdini::HoudiniInterrupter boss("Computing VDB grids");
-	const auto& sopparms = cookparms.parms<SOP_ReadWriteTestParms>();
+	const auto& sopparms = cookparms.parms<SOP_VDBFromGridParms>();
 	GU_Detail* detail = cookparms.gdh().gdpNC();
 	const GEO_Detail* const in_geo = cookparms.inputGeo(0);
 
@@ -55,7 +56,7 @@ void SOP_ReadWriteTestVerb::cook(const CookParms& cookparms) const {
 
 
 	const GA_ROHandleF attrib(detail->findFloatTuple(GA_ATTRIB_POINT, "density"));
-	if(!attrib.isValid()) {
+	if (!attrib.isValid()) {
 		cookparms.sopAddError(SOP_MESSAGE, "No density attribute found");
 	}
 
@@ -63,7 +64,7 @@ void SOP_ReadWriteTestVerb::cook(const CookParms& cookparms) const {
 	std::vector<float> values;
 
 
-	{ // TODO: idk what I did there but without mutex it crashes
+	{  // TODO: idk what I did there but without mutex it crashes
 		ScopedTimer timer("Extracting points");
 		std::mutex mutex;
 		UTparallelFor(GA_SplittableRange(in_geo->getPointRange()), [&](const GA_Range& range) {
@@ -71,8 +72,7 @@ void SOP_ReadWriteTestVerb::cook(const CookParms& cookparms) const {
 			std::vector<nanovdb::Coord> local_coords;
 			std::vector<float> local_values;
 
-			for(GA_Iterator it(range); !it.atEnd(); ++it)
-			{
+			for (GA_Iterator it(range); !it.atEnd(); ++it) {
 				UT_Vector3F pos = in_geo->getPos3(it.getOffset());
 				float value = attrib.get(it.getOffset());
 				local_coords.emplace_back(pos[0], pos[1], pos[2]);
@@ -99,7 +99,7 @@ void SOP_ReadWriteTestVerb::cook(const CookParms& cookparms) const {
 		boss.end();
 	}
 
-	if(handle.isEmpty()) {
+	if (handle.isEmpty()) {
 		cookparms.sopAddError(SOP_MESSAGE, "Failed to create grid");
 	}
 
@@ -113,7 +113,6 @@ void SOP_ReadWriteTestVerb::cook(const CookParms& cookparms) const {
 		GU_PrimVDB::buildFromGrid(*detail, vdbGrid, nullptr, "density");
 		boss.end();
 	}
-
 }
 
 void LoadVDBs(const SOP_NodeVerb::CookParms& cookparms, openvdb_houdini::HoudiniInterrupter& boss,

@@ -25,8 +25,9 @@ find_package(Houdini REQUIRED)
 # ------- End Houdini -----------
 
 houdini_generate_proto_headers( FILES
-        src/SOP/Solver/SOP_VDBSolver.cpp
-        src/SOP/ReadWrite/SOP_ReadWriteTest.cpp
+        src/SOP/Advection/SOP_VDBAdvect.cpp
+        src/SOP/ReadWrite/SOP_VDBFromGrid.cpp
+        src/SOP/VelocityAdvection/SOP_VDBAdvectVelocity.cpp
 )
 
 ########################  Utils library ########################################################################
@@ -49,18 +50,37 @@ target_include_directories(Utils PUBLIC
 ########################################################################################################################
 
 
-########################  SOP_VDBSolver library ########################################################################
-add_library(SOP_VDBSolver SHARED
-        src/SOP/Solver/SOP_VDBSolver.cpp
-        src/SOP/Solver/SOP_VDBSolver.hpp
+########################  SOP_Advect library ########################################################################
+add_library(SOP_Advect SHARED
+        src/SOP/Advection/SOP_VDBAdvect.cpp
+        src/SOP/Advection/SOP_VDBAdvect.hpp
 )
-target_link_libraries(SOP_VDBSolver PRIVATE
+target_link_libraries(SOP_Advect PRIVATE
         Utils
         Kernels
         Houdini
         "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
-target_include_directories(SOP_VDBSolver PRIVATE
+target_include_directories(SOP_Advect PRIVATE
+        src
+        ${CMAKE_CURRENT_BINARY_DIR}
+        $ENV{HFS}/toolkit/include
+)
+########################################################################################################################
+
+
+########################  SOP_AdvectVelocity library ########################################################################
+add_library(SOP_AdvectVelocity SHARED
+        src/SOP/VelocityAdvection/SOP_VDBAdvectVelocity.cpp
+        src/SOP/VelocityAdvection/SOP_VDBAdvectVelocity.hpp
+)
+target_link_libraries(SOP_AdvectVelocity PRIVATE
+        Utils
+        Kernels
+        Houdini
+        "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
+)
+target_include_directories(SOP_AdvectVelocity PRIVATE
         src
         ${CMAKE_CURRENT_BINARY_DIR}
         $ENV{HFS}/toolkit/include
@@ -69,21 +89,22 @@ target_include_directories(SOP_VDBSolver PRIVATE
 
 
 ########################  SOP_ReadWriteTest library ####################################################################
-add_library(SOP_ReadWriteTest SHARED
-        src/SOP/ReadWrite/SOP_ReadWriteTest.cpp
-        src/SOP/ReadWrite/SOP_ReadWriteTest.hpp
+add_library(SOP_VDBFromGrid SHARED
+        src/SOP/ReadWrite/SOP_VDBFromGrid.cpp
+        src/SOP/ReadWrite/SOP_VDBFromGrid.hpp
 )
-target_link_libraries(SOP_ReadWriteTest PRIVATE
+target_link_libraries(SOP_VDBFromGrid PRIVATE
         Utils
         Kernels
         Houdini
         "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
-target_include_directories(SOP_ReadWriteTest PRIVATE
+target_include_directories(SOP_VDBFromGrid PRIVATE
         src
         ${CMAKE_CURRENT_BINARY_DIR}
         $ENV{HFS}/toolkit/include
 )
 ########################################################################################################################
-houdini_configure_target(SOP_ReadWriteTest $ENV{DSO_Path})
-houdini_configure_target(SOP_VDBSolver $ENV{DSO_Path})
+houdini_configure_target(SOP_VDBFromGrid $ENV{DSO_Path})
+houdini_configure_target(SOP_Advect $ENV{DSO_Path})
+houdini_configure_target(SOP_AdvectVelocity $ENV{DSO_Path})
