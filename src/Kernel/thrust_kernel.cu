@@ -1,8 +1,9 @@
+#include <cuda/std/__algorithm/clamp.h>
 #include <nanovdb/NanoVDB.h>
+#include <nanovdb/util/GridBuilder.h>
 #include <nanovdb/util/SampleFromVoxels.h>
 
 #include <cuda/std/cmath>
-#include <cuda/std/__algorithm/clamp.h>
 
 #include "utils.cuh"
 
@@ -73,9 +74,6 @@ extern "C" void thrust_kernel(nanovdb::FloatGrid* tempGrid, nanovdb::FloatGrid* 
 	const unsigned int numVoxels = 512 * leafCount;
 	const unsigned int numBlocks = blocksPerGrid(numVoxels, numThreads);
 
-
-	// TODO: Race condition Read-Write on deviceGrid
-	// Somehow make a deep copy to have a readDeviceGrid and writeDeviceGrid
 	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(numVoxels, [tempGrid, deviceGrid, velGrid, voxelSize, dt] __device__(const size_t n) {
 		auto& dtree = deviceGrid->tree();
 		auto& vtree = velGrid->tree();

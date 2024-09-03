@@ -34,7 +34,7 @@ PRM_Template* SOP_ReadWriteTest::buildTemplates() {
 
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hreadwrite", "HReadWrite", SOP_ReadWriteTest::myConstructor,
-	                                   SOP_ReadWriteTest::buildTemplates(), 1, 1, nullptr, 0));
+	                                   SOP_ReadWriteTest::buildTemplates(), 1, 1, nullptr, OP_FLAG_GENERATOR));
 }
 
 
@@ -43,7 +43,7 @@ const SOP_NodeVerb::Register<SOP_ReadWriteTestVerb> SOP_ReadWriteTestVerb::theVe
 const SOP_NodeVerb* SOP_ReadWriteTest::cookVerb() const { return SOP_ReadWriteTestVerb::theVerb.get(); }
 
 
-void SOP_ReadWriteTestVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
+void SOP_ReadWriteTestVerb::cook(const CookParms& cookparms) const {
 	openvdb_houdini::HoudiniInterrupter boss("Computing VDB grids");
 	const auto& sopparms = cookparms.parms<SOP_ReadWriteTestParms>();
 	GU_Detail* detail = cookparms.gdh().gdpNC();
@@ -54,7 +54,6 @@ void SOP_ReadWriteTestVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const
 	}
 
 
-	// Try with a float
 	const GA_ROHandleF attrib(detail->findFloatTuple(GA_ATTRIB_POINT, "density"));
 	if(!attrib.isValid()) {
 		cookparms.sopAddError(SOP_MESSAGE, "No density attribute found");
@@ -105,8 +104,6 @@ void SOP_ReadWriteTestVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const
 	}
 
 	handle.deviceDownload();
-	detail->clearAndDestroy();
-
 	{
 		const auto name = "Create VDB Grid from NanoVDB Grid";
 		boss.start(name);

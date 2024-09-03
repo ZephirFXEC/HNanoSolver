@@ -63,7 +63,7 @@ class SOP_ReadWriteTestVerb final : public SOP_NodeVerb {
 	[[nodiscard]] SOP_NodeCache* allocCache() const override { return new SOP_ReadWriteTestCache(); }
 	[[nodiscard]] UT_StringHolder name() const override { return "HReadWrite"; }
 
-	SOP_NodeVerb::CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_DUPLICATE; }
+	SOP_NodeVerb::CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_GENERATOR; }
 
 	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
 

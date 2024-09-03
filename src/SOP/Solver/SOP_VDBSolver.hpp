@@ -11,6 +11,7 @@
 #include <nanovdb/util/cuda/CudaDeviceBuffer.h>
 
 #include "SOP_VDBSolver.proto.h"
+#include "Utils/Utils.hpp"
 
 namespace VdbSolver {
 class SOP_VdbSolver final : public SOP_Node {
@@ -68,26 +69,45 @@ class SOP_VdbSolverVerb final : public SOP_NodeVerb {
 	[[nodiscard]] SOP_NodeCache* allocCache() const override { return new SOP_VdbSolverCache(); }
 	[[nodiscard]] UT_StringHolder name() const override { return "hnanoadvect"; }
 
-	SOP_NodeVerb::CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_DUPLICATE; }
+	CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_GENERATOR; }
 
 	template <typename GridT>
-	void convertAndUpload(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const typename GridT::ConstPtr& grid,
-	                      const cudaStream_t* stream) const;
+	[[nodiscard]] static UT_ErrorSeverity loadVDBs(const GU_Detail* aGeo, const GU_Detail* bGeo,
+	                                               std::vector<openvdb::GridBase::ConstPtr>& AGrid,
+	                                               openvdb::VectorGrid::ConstPtr& BGrid);
+
+	template <typename NanoVDBGridType, typename OpenVDBGridType>
+	[[nodiscard]] UT_ErrorSeverity processGrid(const typename OpenVDBGridType::ConstPtr& grid,
+	                                           SOP_VdbSolverCache* sopcache, const SOP_VDBSolverParms& sopparms,
+	                                           GU_Detail* detail, const cudaStream_t* stream) const;
+
+	template <typename GridT>
+	[[nodiscard]] UT_ErrorSeverity convertAndUpload(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& buffer,
+	                                                const typename GridT::ConstPtr& grid,
+	                                                const cudaStream_t* const stream) const;
+
+	template <typename GridT>
+	[[nodiscard]] UT_ErrorSeverity setupGridPointers(SOP_VdbSolverCache* sopcache, GridT* gpuAGrid,
+	                                                 const nanovdb::Vec3fGrid* gpuBGrid, const GridT* cpuGrid) const;
+
+
+	template <typename GridT>
+	[[nodiscard]] UT_ErrorSeverity convertToOpenVDBAndBuildGrid(SOP_VdbSolverCache* sopcache, GU_Detail* detail,
+	                                                            const std::string& gridName) const;
 
 	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
-
 	static const SOP_NodeVerb::Register<SOP_VdbSolverVerb> theVerb;
-
 	static const char* const theDsFile;
 };
 
 template <typename GridT>
 struct KernelData {
-	GridT* _temp_grid;
-	GridT* output_grid;
-	nanovdb::Vec3fGrid* velocity_grid;
-	float voxel_size;
-	float dt;
+	GridT* _temp_grid = nullptr;
+	GridT* output_grid = nullptr;
+	nanovdb::Vec3fGrid* velocity_grid = nullptr;
+	int leaf_size = 0;
+	float voxel_size = 0.1f;
+	float dt = 0;
 };
 
 }  // namespace VdbSolver
