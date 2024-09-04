@@ -13,11 +13,27 @@
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
 
+#include <GEO/GEO_AttributeHandle.h>
+
 extern "C" void pointToGrid(const Grid& gridData, nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>&);
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 {
     name        parameters
+    parm {
+        name        "attribs"
+        label       "Attribute to rasterize"
+        type        string
+        default     { "density" }
+        parmtag     { "sop_input" "0" }
+    }
+    parm {
+        name    "div"
+        label   "Divisions"
+        type    integer
+        default { "1" }
+        range   { 1! 12 }
+    }
 	parm {
 		name "voxelsize"
 		label "Voxel Size"
@@ -30,6 +46,10 @@ const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 
 PRM_Template* SOP_HNanoVDBFromGrid::buildTemplates() {
 	static PRM_TemplateBuilder templ("SOP_VDBFromGrid.cpp", SOP_HNanoVDBFromGridVerb::theDsFile);
+	if (templ.justBuilt())
+	{
+		templ.setChoiceListPtr("attribs", &SOP_Node::pointAttribMenu);
+	}
 	return templ.templates();
 }
 
@@ -50,103 +70,84 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	GU_Detail* detail = cookparms.gdh().gdpNC();
 	const GEO_Detail* const in_geo = cookparms.inputGeo(0);
 
+	// Channel manager has time info for us
+	const CH_Manager *chman = OPgetDirector()->getChannelManager();
+	// This is the frame that we're cooking at...
+	fpreal currframe = chman->getSample(cookparms.getCookTime());
+
 	if (!in_geo) {
 		cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
 	}
 
-
 	const GA_ROHandleF attrib(detail->findFloatTuple(GA_ATTRIB_POINT, "density"));
 	if (!attrib.isValid()) {
-		cookparms.sopAddError(SOP_MESSAGE, "No density attribute found");
+		cookparms.sopAddMessage(SOP_MESSAGE, "No attribute found to rasterize");
 	}
 
-	std::vector<nanovdb::Coord> coords;
+	std::vector<openvdb::Coord> coords;
 	std::vector<float> values;
 
 
-	{  // TODO: idk what I did there but without mutex it crashes
+	{
 		ScopedTimer timer("Extracting points");
-		std::mutex mutex;
-		UTparallelFor(GA_SplittableRange(in_geo->getPointRange()), [&](const GA_Range& range) {
-			// Thread-local storage for each thread
-			std::vector<nanovdb::Coord> local_coords;
-			std::vector<float> local_values;
-
-			for (GA_Iterator it(range); !it.atEnd(); ++it) {
-				UT_Vector3F pos = in_geo->getPos3(it.getOffset());
-				float value = attrib.get(it.getOffset());
-				local_coords.emplace_back(pos[0], pos[1], pos[2]);
-				local_values.push_back(value);
+		GA_Offset block_start, block_end;
+		for (GA_Iterator pageI(detail->getPointRange()); pageI.blockAdvance(block_start, block_end); ) {
+			for (GA_Offset ptoff = block_start; ptoff < block_end; ++ptoff)  {
+				UT_Vector3F pos = in_geo->getPos3(ptoff);
+				float value = attrib.get(ptoff);
+				coords.emplace_back(pos[0], pos[1], pos[2]);
+				values.push_back(value);
 			}
-
-			// Lock and append local results to shared vectors
-			{
-				std::lock_guard<std::mutex> lock(mutex);
-				coords.insert(coords.end(), local_coords.begin(), local_coords.end());
-				values.insert(values.end(), local_values.begin(), local_values.end());
-			}
-		});
-	}
-
-	const Grid data = {coords, values, static_cast<float>(sopparms.getVoxelsize())};
-
-	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> handle;
-	{
-		const auto name = "Create NanoVDB Grid from points";
-		boss.start(name);
-		ScopedTimer timer(name);
-		pointToGrid(data, handle);
-		boss.end();
-	}
-
-	if (handle.isEmpty()) {
-		cookparms.sopAddError(SOP_MESSAGE, "Failed to create grid");
-	}
-
-	handle.deviceDownload();
-	{
-		const auto name = "Create VDB Grid from NanoVDB Grid";
-		boss.start(name);
-		ScopedTimer timer(name);
-		const auto grid = nanovdb::nanoToOpenVDB(handle);
-		const openvdb::FloatGrid::Ptr vdbGrid = openvdb::gridPtrCast<openvdb::FloatGrid>(grid);
-		GU_PrimVDB::buildFromGrid(*detail, vdbGrid, nullptr, "density");
-		boss.end();
-	}
-}
-
-void LoadVDBs(const SOP_NodeVerb::CookParms& cookparms, openvdb_houdini::HoudiniInterrupter& boss,
-              const GEO_Detail* const in_geo) {
-	std::vector<GU_PrimVDB*> prims;
-
-	for (openvdb_houdini::VdbPrimIterator it(in_geo); it; ++it) {
-		if (boss.wasInterrupted()) {
-			throw std::runtime_error("processing was interrupted");
-		}
-		prims.push_back(it.getPrimitive());
-	}
-
-	if (prims.empty()) {
-		cookparms.sopAddError(SOP_MESSAGE, "First input must contain VDBs!");
-	}
-
-	{
-		ScopedTimer timer("Making grids unique");
-		for (const auto& prim : prims) {
-			prim->makeGridUnique();
 		}
 	}
 
-	std::vector<openvdb::GridBase::Ptr> grids;
-	{
-		ScopedTimer timer("Extracting grids");
-		for (const auto prim : prims) {
-			grids.push_back(prim->getGridPtr());
-		}
-	}
+	/*
+	 * TODO: Idea: create a kernel that loops over the nanovdb grid and output [pos, values]
+	 * so i can build the openvdb grid in parallel
+	 */
 
-	auto printOp = [](const openvdb::GridBase& in) { in.print(std::cout, 1); };
-	for (const auto& grid : grids) {
-		grid->apply<openvdb_houdini::VolumeGridTypes>(printOp);
-	}
+	const size_t numCores = sopparms.getDiv();
+	const auto chunkSize = coords.size() / numCores;
+
+	std::mutex detailMutex;  // Mutex to protect shared resources
+
+	auto processChunk = [&](const size_t start, const size_t end) {
+		ScopedTimer timer("Creating VDB grids");
+
+		Grid chunkData = {
+			std::vector<openvdb::Coord>(coords.begin() + start, coords.begin() + end),
+			std::vector<float>(values.begin() + start, values.begin() + end),
+			static_cast<float>(sopparms.getVoxelsize())
+		};
+
+
+		const openvdb::FloatGrid::Ptr grid = openvdb::FloatGrid::create();
+		grid->setGridClass(openvdb::GRID_FOG_VOLUME);
+		grid->setTransform(openvdb::math::Transform::createLinearTransform(sopparms.getVoxelsize()));
+		grid->setName("density");
+
+		auto accessor = grid->getAccessor();
+
+		for (size_t j = start; j < end; ++j) {
+			auto& coord = coords[j];
+			auto& value = values[j];
+			accessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
+		}
+
+		{
+			std::lock_guard<std::mutex> lock(detailMutex);
+			GU_PrimVDB::buildFromGrid(*detail, grid);
+		}
+	};
+
+	detail->clearAndDestroy();
+	openvdb::initialize();
+
+	UTparallelFor(UT_BlockedRange<size_t>(0, numCores), [&](const UT_BlockedRange<size_t>& range) {
+		for (size_t i = range.begin(); i < range.end(); ++i) {
+			const size_t start = i * chunkSize;
+			const size_t end = (i == numCores - 1) ? coords.size() : (i + 1) * chunkSize;
+			processChunk(start, end);
+		}
+	});
 }

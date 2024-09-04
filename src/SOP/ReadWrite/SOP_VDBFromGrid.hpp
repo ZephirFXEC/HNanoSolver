@@ -15,7 +15,7 @@
 #include "SOP_VDBFromGrid.proto.h"
 
 struct Grid {
-	std::vector<nanovdb::Coord> coords{};
+	std::vector<openvdb::Coord> coords{};
 	std::vector<float> values{};
 	float voxelSize = 0.5f;
 };
@@ -24,6 +24,9 @@ class SOP_HNanoVDBFromGrid final : public SOP_Node {
    public:
 	SOP_HNanoVDBFromGrid(OP_Network* net, const char* name, OP_Operator* op) : SOP_Node(net, name, op) {
 		mySopFlags.setManagesDataIDs(true);
+
+		// It means we cook at every frame change.
+		OP_Node::flags().setTimeDep(true);
 	}
 
 	~SOP_HNanoVDBFromGrid() override = default;
