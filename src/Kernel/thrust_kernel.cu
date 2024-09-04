@@ -7,6 +7,61 @@
 
 #include "utils.cuh"
 
+
+extern "C" void get_pos_val(nanovdb::FloatGrid* grid, const size_t leafCount, cudaStream_t stream, nanovdb::Coord* h_coords, float* h_values, size_t& count) {
+
+	size_t* voxelCount = nullptr;
+	cudaCheck(cudaMalloc(&voxelCount, sizeof(size_t)));
+	cudaCheck(cudaMemset(voxelCount, 0, sizeof(size_t)));
+
+	constexpr unsigned int numThreads = 256;
+	const unsigned int numVoxels = 512 * leafCount;
+	const unsigned int numBlocks = blocksPerGrid(numVoxels, numThreads);
+
+	nanovdb::Coord* d_coords = nullptr;
+	float* d_values = nullptr;
+
+	cudaCheck(cudaMalloc(&d_coords, numVoxels * sizeof(nanovdb::Coord)));
+	cudaCheck(cudaMalloc(&d_values, numVoxels * sizeof(float)));
+	cudaCheck(cudaMemset(d_coords, 0, numVoxels * sizeof(nanovdb::Coord)));
+	cudaCheck(cudaMemset(d_values, 0, numVoxels * sizeof(float)));
+
+	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(numVoxels, [grid, voxelCount, d_coords, d_values] __device__(const size_t n) {
+		auto& tree = grid->tree();
+		const auto* leaf = tree.getFirstNode<0>() + (n >> 9);
+		const auto acc = tree.getAccessor();
+		const int i = n & 511;
+		if (leaf->isActive()) {
+			const nanovdb::Coord voxelCoord = leaf->offsetToGlobalCoord(i);
+			const float value = acc.getValue(voxelCoord);
+			const size_t index = atomicAdd(voxelCount, 1);
+			d_coords[index] = voxelCoord;
+			d_values[index] = value;
+		}
+	});
+
+	// Download the count of valid voxels
+	size_t h_count;
+	cudaCheck(cudaMemcpy(&h_count, voxelCount, sizeof(size_t), cudaMemcpyDeviceToHost));
+
+	// Check if h_count exceeds allocated numVoxels
+	if (h_count > numVoxels) {
+		printf("Error: h_count exceeds allocated space\n");
+		h_count = numVoxels;  // Adjust to prevent overflow
+	}
+
+	// Now you know how many valid voxels were processed and can download the data
+	cudaCheck(cudaMemcpy(h_coords, d_coords, h_count * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost));
+	cudaCheck(cudaMemcpy(h_values, d_values, h_count * sizeof(float), cudaMemcpyDeviceToHost));
+
+	count = h_count;
+
+	// Free allocated memory
+	cudaCheck(cudaFree(voxelCount));
+	cudaCheck(cudaFree(d_coords));
+	cudaCheck(cudaFree(d_values));
+}
+
 extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid,
                                   const uint64_t leafCount, const float voxelSize, const float dt, cudaStream_t stream) {
 	constexpr unsigned int numThreads = 256;
@@ -68,7 +123,7 @@ extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb:
 	});
 }
 
-extern "C" void thrust_kernel(nanovdb::FloatGrid* tempGrid, nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const int leafCount,
+extern "C" void thrust_kernel(nanovdb::FloatGrid* tempGrid, nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const size_t leafCount,
                               const float voxelSize, const float dt, cudaStream_t stream) {
 	constexpr unsigned int numThreads = 256;
 	const unsigned int numVoxels = 512 * leafCount;

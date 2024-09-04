@@ -57,7 +57,9 @@ class SOP_HNanoVDBAdvectCache final : public SOP_NodeCache {
 
 	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pAHandle;
 	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pBHandle;
-	openvdb::GridBase::Ptr pOpenVDBGrid = nullptr;
+
+	nanovdb::Coord* h_coords = nullptr;
+	float* h_values = nullptr;
 };
 
 class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
