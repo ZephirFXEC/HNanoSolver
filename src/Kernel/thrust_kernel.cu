@@ -1,6 +1,5 @@
 #include <cuda/std/__algorithm/clamp.h>
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/GridBuilder.h>
 #include <nanovdb/util/SampleFromVoxels.h>
 
 #include <cuda/std/cmath>
@@ -8,8 +7,9 @@
 #include "utils.cuh"
 
 
-extern "C" void get_pos_val(nanovdb::FloatGrid* grid, const size_t leafCount, cudaStream_t stream, nanovdb::Coord* h_coords, float* h_values, size_t& count) {
-
+extern "C" void vel_thrust_kernel(const nanovdb::Vec3fGrid* velGrid, const uint64_t leafCount, const float voxelSize,
+                                  const float dt, cudaStream_t stream, nanovdb::Coord* h_coords,
+                                  nanovdb::Vec3f* h_values, size_t& count) {
 	size_t* voxelCount = nullptr;
 	cudaCheck(cudaMalloc(&voxelCount, sizeof(size_t)));
 	cudaCheck(cudaMemset(voxelCount, 0, sizeof(size_t)));
@@ -19,65 +19,18 @@ extern "C" void get_pos_val(nanovdb::FloatGrid* grid, const size_t leafCount, cu
 	const unsigned int numBlocks = blocksPerGrid(numVoxels, numThreads);
 
 	nanovdb::Coord* d_coords = nullptr;
-	float* d_values = nullptr;
+	nanovdb::Vec3f* d_values = nullptr;
 
 	cudaCheck(cudaMalloc(&d_coords, numVoxels * sizeof(nanovdb::Coord)));
-	cudaCheck(cudaMalloc(&d_values, numVoxels * sizeof(float)));
+	cudaCheck(cudaMalloc(&d_values, numVoxels * sizeof(nanovdb::Vec3f)));
 	cudaCheck(cudaMemset(d_coords, 0, numVoxels * sizeof(nanovdb::Coord)));
-	cudaCheck(cudaMemset(d_values, 0, numVoxels * sizeof(float)));
+	cudaCheck(cudaMemset(d_values, 0, numVoxels * sizeof(nanovdb::Vec3f)));
 
-	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(numVoxels, [grid, voxelCount, d_coords, d_values] __device__(const size_t n) {
-		auto& tree = grid->tree();
-		const auto* leaf = tree.getFirstNode<0>() + (n >> 9);
-		const auto acc = tree.getAccessor();
-		const int i = n & 511;
-		if (leaf->isActive()) {
-			const nanovdb::Coord voxelCoord = leaf->offsetToGlobalCoord(i);
-			const float value = acc.getValue(voxelCoord);
-			const size_t index = atomicAdd(voxelCount, 1);
-			d_coords[index] = voxelCoord;
-			d_values[index] = value;
-		}
-	});
-
-	// Download the count of valid voxels
-	size_t h_count;
-	cudaCheck(cudaMemcpy(&h_count, voxelCount, sizeof(size_t), cudaMemcpyDeviceToHost));
-
-	// Check if h_count exceeds allocated numVoxels
-	if (h_count > numVoxels) {
-		printf("Error: h_count exceeds allocated space\n");
-		h_count = numVoxels;  // Adjust to prevent overflow
-	}
-
-	// Now you know how many valid voxels were processed and can download the data
-	cudaCheck(cudaMemcpy(h_coords, d_coords, h_count * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost));
-	cudaCheck(cudaMemcpy(h_values, d_values, h_count * sizeof(float), cudaMemcpyDeviceToHost));
-
-	count = h_count;
-
-	// Free allocated memory
-	cudaCheck(cudaFree(voxelCount));
-	cudaCheck(cudaFree(d_coords));
-	cudaCheck(cudaFree(d_values));
-}
-
-extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid,
-                                  const uint64_t leafCount, const float voxelSize, const float dt, cudaStream_t stream) {
-	constexpr unsigned int numThreads = 256;
-	const unsigned int numVoxels = 512 * leafCount;
-	const unsigned int numBlocks = blocksPerGrid(numVoxels, numThreads);
-
-	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(numVoxels, [deviceGrid, velGrid, voxelSize,
-	                                                    dt] __device__(const uint64_t n) {
-		auto& dtree = deviceGrid->tree();
+	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(numVoxels, [velGrid, voxelSize, dt, voxelCount, d_coords,
+	                                                               d_values] __device__(const uint64_t n) {
 		const auto& vtree = velGrid->tree();
-
-		auto* leaf_d = dtree.getFirstNode<0>() + (n >> 9);
 		const int i_d = n & 511;
-
 		const auto* leaf_v = vtree.getFirstNode<0>() + (n >> 9);
-
 		const auto velAccessor = velGrid->getAccessor();
 		const auto velSampler = nanovdb::createSampler<1>(velAccessor);
 
@@ -117,65 +70,117 @@ extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid* deviceGrid, const nanovdb:
 			new_velocity[1] = lerp(v_forward[1], v_corrected[1], blend_factor);
 			new_velocity[2] = lerp(v_forward[2], v_corrected[2], blend_factor);
 
-			// Set the new velocity value
-			leaf_d->setValue(voxelCoord, new_velocity);
+			const size_t index = atomicAdd(voxelCount, 1);
+			d_coords[index] = voxelCoord;
+			d_values[index] = new_velocity;
 		}
 	});
+
+	// Download the count of valid voxels
+	size_t h_count;
+	cudaCheck(cudaMemcpy(&h_count, voxelCount, sizeof(size_t), cudaMemcpyDeviceToHost));
+
+	// Check if h_count exceeds allocated numVoxels
+	if (h_count > numVoxels) {
+		printf("Error: h_count exceeds allocated space\n");
+		h_count = numVoxels;  // Adjust to prevent overflow
+	}
+
+	// Now you know how many valid voxels were processed and can download the data
+	cudaCheck(cudaMemcpy(h_coords, d_coords, h_count * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost));
+	cudaCheck(cudaMemcpy(h_values, d_values, h_count * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost));
+
+	count = h_count;
+
+	// Free allocated memory
+	cudaCheck(cudaFree(voxelCount));
+	cudaCheck(cudaFree(d_coords));
+	cudaCheck(cudaFree(d_values));
 }
 
-extern "C" void thrust_kernel(nanovdb::FloatGrid* tempGrid, nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid, const size_t leafCount,
-                              const float voxelSize, const float dt, cudaStream_t stream) {
+extern "C" void thrust_kernel(const nanovdb::FloatGrid* deviceGrid, const nanovdb::Vec3fGrid* velGrid,
+                              const size_t leafCount, const float voxelSize, const float dt, cudaStream_t stream,
+                              nanovdb::Coord* h_coords, float* h_values, size_t& count) {
+	size_t* voxelCount = nullptr;
+	cudaCheck(cudaMalloc(&voxelCount, sizeof(size_t)));
+	cudaCheck(cudaMemset(voxelCount, 0, sizeof(size_t)));
+
 	constexpr unsigned int numThreads = 256;
 	const unsigned int numVoxels = 512 * leafCount;
 	const unsigned int numBlocks = blocksPerGrid(numVoxels, numThreads);
 
-	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(numVoxels, [tempGrid, deviceGrid, velGrid, voxelSize, dt] __device__(const size_t n) {
-		auto& dtree = deviceGrid->tree();
-		auto& vtree = velGrid->tree();
-		auto& temp_tree = tempGrid->tree();
+	nanovdb::Coord* d_coords = nullptr;
+	float* d_values = nullptr;
 
-		const auto* leaf_temp = temp_tree.getFirstNode<0>() + (n >> 9);
-		auto* leaf_d = dtree.getFirstNode<0>() + (n >> 9);
-		auto* leaf_v = vtree.getFirstNode<0>() + (n >> 9);
+	cudaCheck(cudaMalloc(&d_coords, numVoxels * sizeof(nanovdb::Coord)));
+	cudaCheck(cudaMalloc(&d_values, numVoxels * sizeof(float)));
+	cudaCheck(cudaMemset(d_coords, 0, numVoxels * sizeof(nanovdb::Coord)));
+	cudaCheck(cudaMemset(d_values, 0, numVoxels * sizeof(float)));
 
-		const int i_d = n & 511;
-		const auto velAccessor = velGrid->getAccessor();
-		const auto denAccessor = tempGrid->getAccessor();
-		const auto velSampler = nanovdb::createSampler<1>(velAccessor);
-		const auto denSampler = nanovdb::createSampler<1>(denAccessor);
+	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(
+	    numVoxels, [deviceGrid, velGrid, voxelSize, dt, voxelCount, d_coords, d_values] __device__(const size_t n) {
+		    const auto& dtree = deviceGrid->tree();
 
-		if (leaf_v->isActive()) {
-			// Get the position of the voxel in index space
-			const nanovdb::Coord voxelCoord = leaf_temp->offsetToGlobalCoord(i_d);
-			const nanovdb::Vec3f voxelCoordf = voxelCoord.asVec3s();
-			const float density = denSampler(voxelCoordf);
+		    const auto* leaf_d = dtree.getFirstNode<0>() + (n >> 9);
 
-			// Forward step
-			const nanovdb::Vec3f forward_pos = voxelCoordf - velSampler(voxelCoordf) * (dt / voxelSize);
-			const float d_forward = denSampler(forward_pos);
+		    const int i_d = n & 511;
+		    const auto velAccessor = velGrid->getAccessor();
+		    const auto denAccessor = deviceGrid->getAccessor();
+		    const auto velSampler = nanovdb::createSampler<1>(velAccessor);
+		    const auto denSampler = nanovdb::createSampler<1>(denAccessor);
 
-			// Backward step
-			const nanovdb::Vec3f back_pos = voxelCoordf + velSampler(forward_pos) * (dt / voxelSize);
-			const float d_backward = denSampler(back_pos);
+		    if (leaf_d->isActive()) {
+			    // Get the position of the voxel in index space
+			    const nanovdb::Coord voxelCoord = leaf_d->offsetToGlobalCoord(i_d);
+			    const nanovdb::Vec3f voxelCoordf = voxelCoord.asVec3s();
+			    const float density = denSampler(voxelCoordf);
 
-			// Error estimation and correction
-			const float error = 0.5f * (density - d_backward);
-			float d_corrected = d_forward + error;
+			    // Forward step
+			    const nanovdb::Vec3f forward_pos = voxelCoordf - velSampler(voxelCoordf) * (dt / voxelSize);
+			    const float d_forward = denSampler(forward_pos);
 
-			// Limit the correction based on the neighborhood of the forward position
-			const float max_correction = 0.5f * cuda::std::fabs(d_forward - density);
-			d_corrected = cuda::std::clamp(d_corrected, d_forward - max_correction, d_forward + max_correction);
+			    // Backward step
+			    const nanovdb::Vec3f back_pos = voxelCoordf + velSampler(forward_pos) * (dt / voxelSize);
+			    const float d_backward = denSampler(back_pos);
 
-			// Final advection (blend between semi-Lagrangian and BFECC result)
-			constexpr float blend_factor = 0.8f;  // Adjust this value between 0 and 1
-			float new_density = lerp(d_forward, d_corrected, blend_factor);
+			    // Error estimation and correction
+			    const float error = 0.5f * (density - d_backward);
+			    float d_corrected = d_forward + error;
 
-			// Ensure non-negativity
-			new_density = cuda::std::fmax(0.0f, new_density);
+			    // Limit the correction based on the neighborhood of the forward position
+			    const float max_correction = 0.5f * cuda::std::fabs(d_forward - density);
+			    d_corrected = cuda::std::clamp(d_corrected, d_forward - max_correction, d_forward + max_correction);
 
-			// Set the new density value
-			leaf_d->setValue(voxelCoord, new_density);
-		}
-	});
+			    // Final advection (blend between semi-Lagrangian and BFECC result)
+			    constexpr float blend_factor = 0.8f;  // Adjust this value between 0 and 1
+			    float new_density = lerp(d_forward, d_corrected, blend_factor);
+
+			    // Ensure non-negativity
+			    new_density = cuda::std::fmax(0.0f, new_density);
+
+			    const size_t index = atomicAdd(voxelCount, 1);
+			    d_coords[index] = voxelCoord;
+			    d_values[index] = new_density;
+		    }
+	    });
 	cudaCheckError();
+
+	// Download the count of valid voxels
+	size_t h_count;
+	cudaCheck(cudaMemcpy(&h_count, voxelCount, sizeof(size_t), cudaMemcpyDeviceToHost));
+
+	if (h_count > numVoxels) {
+		h_count = numVoxels;
+	}
+
+	// Now you know how many valid voxels were processed and can download the data
+	cudaCheck(cudaMemcpy(h_coords, d_coords, h_count * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost));
+	cudaCheck(cudaMemcpy(h_values, d_values, h_count * sizeof(float), cudaMemcpyDeviceToHost));
+
+	count = h_count;
+
+	// Free allocated memory
+	cudaCheck(cudaFree(voxelCount));
+	cudaCheck(cudaFree(d_coords));
+	cudaCheck(cudaFree(d_values));
 }

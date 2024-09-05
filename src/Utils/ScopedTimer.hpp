@@ -6,17 +6,19 @@
 
 #include <UT/UT_StopWatch.h>
 
+#include <utility>
+
 class ScopedTimer {
    public:
-	explicit ScopedTimer(const char* name) : name_(name) {
+	explicit ScopedTimer(std::string  name) : name_(std::move(name)) {
 		watch_.start();
 
 	}
 	~ScopedTimer() {
-		std::printf("%s Time: %f ms\n", name_,  watch_.lap() * 1000.0);
+		std::printf("%s Time: %f ms\n", name_.c_str(),  watch_.lap() * 1000.0);
 	}
 
    private:
-	const char* name_;
+	const std::string name_;
 	UT_StopWatch watch_;
 };

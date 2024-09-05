@@ -9,9 +9,6 @@
 #include "Utils/Utils.hpp"
 
 
-extern "C" void vel_thrust_kernel(nanovdb::Vec3fGrid*, const nanovdb::Vec3fGrid*, uint64_t, float, float, cudaStream_t);
-
-
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanoadvectvelocity", "HNanoAdvectVelocity",
 	                                   SOP_HNanoAdvectVelocity::myConstructor,
@@ -73,8 +70,8 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 	const GU_Detail* ageo = cookparms.inputGeo(0);
 	const GU_Detail* bgeo = cookparms.inputGeo(1);
 
-	openvdb::VectorGrid::ConstPtr AGrid;
-	openvdb::VectorGrid::ConstPtr BGrid;
+	openvdb::VectorGrid::Ptr AGrid = nullptr;
+	openvdb::VectorGrid::Ptr BGrid = nullptr;
 
 	if (auto err = loadGrid(ageo, AGrid, sopparms.getAgroup()); err != UT_ERROR_NONE) {
 		err = cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
@@ -94,12 +91,15 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 
 		sopcache->pAHandle = nanovdb::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::CudaDeviceBuffer>(
 		    *BGrid, nanovdb::StatsMode::Disable, nanovdb::ChecksumMode::Disable, 0);
-		sopcache->pBHandle = sopcache->pAHandle.copy<nanovdb::CudaDeviceBuffer>();
 
 		sopcache->pAHandle.deviceUpload(stream, false);
-		sopcache->pBHandle.deviceUpload(stream, false);
 		boss.end();
 	}
+
+	nanovdb::Coord* h_coords = nullptr;
+	nanovdb::Vec3f* h_values = nullptr;
+	size_t count = 0;
+	float voxelSize = 0.5f;
 
 	{
 		const auto name = "Computing advection";
@@ -107,40 +107,53 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 		ScopedTimer timer(name);
 
 		nanovdb::Vec3fGrid* gpuAGrid = sopcache->pAHandle.deviceGrid<nanovdb::Vec3f>();
-		const nanovdb::Vec3fGrid* gpuBGrid = sopcache->pBHandle.deviceGrid<nanovdb::Vec3f>();
 		const nanovdb::Vec3fGrid* cpuGrid = sopcache->pAHandle.grid<nanovdb::Vec3f>();
 
 		const uint32_t leafCount = cpuGrid->tree().nodeCount(0);
-		const auto voxelSize = static_cast<float>(cpuGrid->voxelSize()[0]);
+		voxelSize = static_cast<float>(cpuGrid->voxelSize()[0]);
 		const auto deltaTime = static_cast<float>(sopparms.getTimestep());
 
-		vel_thrust_kernel(gpuAGrid, gpuBGrid, leafCount, voxelSize, deltaTime, stream);
-		sopcache->pAHandle.deviceDownload(stream, true);
+		h_coords = new nanovdb::Coord[512 * leafCount];
+		h_values = new nanovdb::Vec3f[512 * leafCount];
+
+		vel_thrust_kernel(gpuAGrid, leafCount, voxelSize, deltaTime, stream, h_coords, h_values, count);
 
 		boss.end();
 	}
 
 	{
-		const auto name = "Building Grid";
-		boss.start(name);
-		ScopedTimer timer(name);
+		ScopedTimer timer("Building Grid " + AGrid->getName());
 
-		sopcache->pOpenVDBGrid = nanovdb::nanoToOpenVDB(sopcache->pAHandle);
-		const openvdb::VectorGrid::Ptr outputGrid = openvdb::gridPtrCast<openvdb::VectorGrid>(sopcache->pOpenVDBGrid);
-		GU_PrimVDB::buildFromGrid(*detail, outputGrid, nullptr, AGrid->getName().c_str());
+		const openvdb::VectorGrid::Ptr grid = openvdb::VectorGrid::create();
+		grid->setGridClass(openvdb::GRID_FOG_VOLUME);
+		grid->setVectorType(openvdb::VEC_CONTRAVARIANT_RELATIVE);
+		grid->setTransform(openvdb::math::Transform::createLinearTransform(voxelSize));
 
-		boss.end();
+		auto accessor = grid->getAccessor();
+
+		for (size_t i = 0; i < count; ++i) {
+			auto& coord = h_coords[i];
+			auto& value = h_values[i];
+
+			accessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()),
+			                  openvdb::Vec3f(value[0], value[1], value[2]));
+		}
+
+		GU_PrimVDB::buildFromGrid(*detail, grid, nullptr, AGrid->getName().c_str());
 	}
+
+	delete[] h_coords;
+	delete[] h_values;
 }
 
 
-UT_ErrorSeverity SOP_HNanoAdvectVelocityVerb::loadGrid(const GU_Detail* aGeo, openvdb::VectorGrid::ConstPtr& grid,
+UT_ErrorSeverity SOP_HNanoAdvectVelocityVerb::loadGrid(const GU_Detail* aGeo, openvdb::VectorGrid::Ptr& grid,
                                                        const UT_StringHolder& group) {
 	ScopedTimer timer("Load input");
 
 	const GA_PrimitiveGroup* groupRef = aGeo->findPrimitiveGroup(group);
-	for (openvdb_houdini::VdbPrimCIterator it(aGeo, groupRef); it; ++it) {
-		if (const auto vdb = openvdb::gridConstPtrCast<openvdb::VectorGrid>((*it)->getConstGridPtr())) {
+	for (openvdb_houdini::VdbPrimIterator it(aGeo, groupRef); it; ++it) {
+		if (const auto vdb = openvdb::gridPtrCast<openvdb::VectorGrid>((*it)->getGridPtr())) {
 			grid = vdb;
 			if (grid) break;
 		}

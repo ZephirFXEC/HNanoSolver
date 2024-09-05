@@ -56,7 +56,6 @@ class SOP_HNanoAdvectVelocityCache final : public SOP_NodeCache {
 
 	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pAHandle;
 	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pBHandle;
-	openvdb::GridBase::Ptr pOpenVDBGrid = nullptr;
 };
 
 class SOP_HNanoAdvectVelocityVerb final : public SOP_NodeVerb {
@@ -69,7 +68,7 @@ class SOP_HNanoAdvectVelocityVerb final : public SOP_NodeVerb {
 
 	CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_GENERATOR; }
 
-	[[nodiscard]] static UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, openvdb::VectorGrid::ConstPtr& grid,
+	[[nodiscard]] static UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, openvdb::VectorGrid::Ptr& grid,
 	                                               const UT_StringHolder& group);
 
 	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
@@ -77,12 +76,6 @@ class SOP_HNanoAdvectVelocityVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
-template <typename GridT>
-struct KernelData {
-	GridT* _temp_grid = nullptr;
-	GridT* output_grid = nullptr;
-	nanovdb::Vec3fGrid* velocity_grid = nullptr;
-	int leaf_size = 0;
-	float voxel_size = 0.1f;
-	float dt = 0;
-};
+extern "C" void vel_thrust_kernel(const nanovdb::Vec3fGrid* velGrid, uint64_t leafCount,
+                                  float voxelSize, float dt, cudaStream_t stream, nanovdb::Coord* h_coords,
+                                  nanovdb::Vec3f* h_values, size_t& count);

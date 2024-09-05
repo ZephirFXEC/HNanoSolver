@@ -5,6 +5,7 @@
 #include "SOP_VDBFromGrid.hpp"
 
 #include <GA/GA_SplittableRange.h>
+#include <GEO/GEO_AttributeHandle.h>
 #include <UT/UT_DSOVersion.h>
 #include <nanovdb/util/cuda/CudaDeviceBuffer.h>
 
@@ -12,8 +13,6 @@
 
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
-
-#include <GEO/GEO_AttributeHandle.h>
 
 extern "C" void pointToGrid(const Grid& gridData, nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>&);
 
@@ -46,8 +45,7 @@ const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 
 PRM_Template* SOP_HNanoVDBFromGrid::buildTemplates() {
 	static PRM_TemplateBuilder templ("SOP_VDBFromGrid.cpp", SOP_HNanoVDBFromGridVerb::theDsFile);
-	if (templ.justBuilt())
-	{
+	if (templ.justBuilt()) {
 		templ.setChoiceListPtr("attribs", &SOP_Node::pointAttribMenu);
 	}
 	return templ.templates();
@@ -71,7 +69,7 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	const GEO_Detail* const in_geo = cookparms.inputGeo(0);
 
 	// Channel manager has time info for us
-	const CH_Manager *chman = OPgetDirector()->getChannelManager();
+	const CH_Manager* chman = OPgetDirector()->getChannelManager();
 	// This is the frame that we're cooking at...
 	fpreal currframe = chman->getSample(cookparms.getCookTime());
 
@@ -91,8 +89,8 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	{
 		ScopedTimer timer("Extracting points");
 		GA_Offset block_start, block_end;
-		for (GA_Iterator pageI(detail->getPointRange()); pageI.blockAdvance(block_start, block_end); ) {
-			for (GA_Offset ptoff = block_start; ptoff < block_end; ++ptoff)  {
+		for (GA_Iterator pageI(detail->getPointRange()); pageI.blockAdvance(block_start, block_end);) {
+			for (GA_Offset ptoff = block_start; ptoff < block_end; ++ptoff) {
 				UT_Vector3F pos = in_geo->getPos3(ptoff);
 				float value = attrib.get(ptoff);
 				coords.emplace_back(pos[0], pos[1], pos[2]);
@@ -100,11 +98,6 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 			}
 		}
 	}
-
-	/*
-	 * TODO: Idea: create a kernel that loops over the nanovdb grid and output [pos, values]
-	 * so i can build the openvdb grid in parallel
-	 */
 
 	const size_t numCores = sopparms.getDiv();
 	const auto chunkSize = coords.size() / numCores;
@@ -114,11 +107,9 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	auto processChunk = [&](const size_t start, const size_t end) {
 		ScopedTimer timer("Creating VDB grids");
 
-		Grid chunkData = {
-			std::vector<openvdb::Coord>(coords.begin() + start, coords.begin() + end),
-			std::vector<float>(values.begin() + start, values.begin() + end),
-			static_cast<float>(sopparms.getVoxelsize())
-		};
+		Grid chunkData = {std::vector<openvdb::Coord>(coords.begin() + start, coords.begin() + end),
+		                  std::vector<float>(values.begin() + start, values.begin() + end),
+		                  static_cast<float>(sopparms.getVoxelsize())};
 
 
 		const openvdb::FloatGrid::Ptr grid = openvdb::FloatGrid::create();

@@ -57,9 +57,6 @@ class SOP_HNanoVDBAdvectCache final : public SOP_NodeCache {
 
 	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pAHandle;
 	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pBHandle;
-
-	nanovdb::Coord* h_coords = nullptr;
-	float* h_values = nullptr;
 };
 
 class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
@@ -70,24 +67,18 @@ class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
 	[[nodiscard]] SOP_NodeCache* allocCache() const override { return new SOP_HNanoVDBAdvectCache(); }
 	[[nodiscard]] UT_StringHolder name() const override { return "hnanoadvect"; }
 
-	CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_GENERATOR; }
+	CookMode cookMode(const SOP_NodeParms* parms) const override { return COOK_GENERATOR; }
 
 	template <typename GridT>
-	[[nodiscard]] UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, std::vector<typename GridT::ConstPtr>& grid,
+	[[nodiscard]] UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, std::vector<typename GridT::Ptr>& grid,
 	                                        const UT_StringHolder& group) const;
 
 
-	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
-	static const SOP_NodeVerb::Register<SOP_HNanoVDBAdvectVerb> theVerb;
+	void cook(const CookParms& cookparms) const override;
+	static const Register<SOP_HNanoVDBAdvectVerb> theVerb;
 	static const char* const theDsFile;
 };
 
-template <typename GridT>
-struct KernelData {
-	GridT* _temp_grid = nullptr;
-	GridT* output_grid = nullptr;
-	nanovdb::Vec3fGrid* velocity_grid = nullptr;
-	int leaf_size = 0;
-	float voxel_size = 0.1f;
-	float dt = 0;
-};
+extern "C" void thrust_kernel(const nanovdb::FloatGrid* device, const nanovdb::Vec3fGrid* vel, size_t leaf,
+                              float voxelSize, float dt, cudaStream_t stream, nanovdb::Coord* h_coords, float* h_values,
+                              size_t& count);
