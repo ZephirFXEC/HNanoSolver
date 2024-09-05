@@ -26,6 +26,8 @@ extern "C" void vel_thrust_kernel(const nanovdb::Vec3fGrid* velGrid, const uint6
 	cudaCheck(cudaMemset(d_coords, 0, numVoxels * sizeof(nanovdb::Coord)));
 	cudaCheck(cudaMemset(d_values, 0, numVoxels * sizeof(nanovdb::Vec3f)));
 
+	cudaDeviceSynchronize();
+
 	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(numVoxels, [velGrid, voxelSize, dt, voxelCount, d_coords,
 	                                                               d_values] __device__(const uint64_t n) {
 		const auto& vtree = velGrid->tree();
@@ -76,13 +78,14 @@ extern "C" void vel_thrust_kernel(const nanovdb::Vec3fGrid* velGrid, const uint6
 		}
 	});
 
+	cudaDeviceSynchronize();
+
 	// Download the count of valid voxels
 	size_t h_count;
 	cudaCheck(cudaMemcpy(&h_count, voxelCount, sizeof(size_t), cudaMemcpyDeviceToHost));
 
 	// Check if h_count exceeds allocated numVoxels
 	if (h_count > numVoxels) {
-		printf("Error: h_count exceeds allocated space\n");
 		h_count = numVoxels;  // Adjust to prevent overflow
 	}
 
@@ -116,6 +119,8 @@ extern "C" void thrust_kernel(const nanovdb::FloatGrid* deviceGrid, const nanovd
 	cudaCheck(cudaMalloc(&d_values, numVoxels * sizeof(float)));
 	cudaCheck(cudaMemset(d_coords, 0, numVoxels * sizeof(nanovdb::Coord)));
 	cudaCheck(cudaMemset(d_values, 0, numVoxels * sizeof(float)));
+
+	cudaDeviceSynchronize();
 
 	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(
 	    numVoxels, [deviceGrid, velGrid, voxelSize, dt, voxelCount, d_coords, d_values] __device__(const size_t n) {
@@ -164,6 +169,8 @@ extern "C" void thrust_kernel(const nanovdb::FloatGrid* deviceGrid, const nanovd
 		    }
 	    });
 	cudaCheckError();
+
+	cudaDeviceSynchronize();
 
 	// Download the count of valid voxels
 	size_t h_count;
