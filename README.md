@@ -3,6 +3,11 @@
 - **HNanoAdvect**, advect any float fields on the GPU
 - **HNanoAdvectVelocity**, advect any vector field on the GPU
 - **HNanoFromGrid**, generate a VDB from points on the GPU
+
+# Still Frame : 
+![image](https://github.com/user-attachments/assets/12de0c85-87df-4b12-ab81-4973c024d9e0)
+
+  
 # DFD : 
 ![image](https://github.com/user-attachments/assets/2a453b9c-edbc-4487-b3fd-368d56098b4d)
 
