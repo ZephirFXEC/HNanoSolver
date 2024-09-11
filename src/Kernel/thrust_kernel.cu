@@ -84,11 +84,6 @@ extern "C" void vel_thrust_kernel(const nanovdb::Vec3fGrid* velGrid, const uint6
 	size_t h_count;
 	cudaCheck(cudaMemcpy(&h_count, voxelCount, sizeof(size_t), cudaMemcpyDeviceToHost));
 
-	// Check if h_count exceeds allocated numVoxels
-	if (h_count > numVoxels) {
-		h_count = numVoxels;  // Adjust to prevent overflow
-	}
-
 	// Now you know how many valid voxels were processed and can download the data
 	cudaCheck(cudaMemcpy(h_coords, d_coords, h_count * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost));
 	cudaCheck(cudaMemcpy(h_values, d_values, h_count * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost));
@@ -175,10 +170,6 @@ extern "C" void thrust_kernel(const nanovdb::FloatGrid* deviceGrid, const nanovd
 	// Download the count of valid voxels
 	size_t h_count;
 	cudaCheck(cudaMemcpy(&h_count, voxelCount, sizeof(size_t), cudaMemcpyDeviceToHost));
-
-	if (h_count > numVoxels) {
-		h_count = numVoxels;
-	}
 
 	// Now you know how many valid voxels were processed and can download the data
 	cudaCheck(cudaMemcpy(h_coords, d_coords, h_count * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost));

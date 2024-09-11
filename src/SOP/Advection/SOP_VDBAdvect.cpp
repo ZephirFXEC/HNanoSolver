@@ -81,8 +81,8 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 	}
 
 
-	cudaStream_t stream;
-	cudaStreamCreate(&stream);
+	cudaStream_t main_stream;
+	cudaStreamCreate(&main_stream);
 
 	{
 		boss.start();
@@ -95,7 +95,7 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 			sopcache->pBHandle =
 			    nanovdb::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::CudaDeviceBuffer>(
 			        *BGrid[0], nanovdb::StatsMode::Disable, nanovdb::ChecksumMode::Disable, 0);
-			sopcache->pBHandle.deviceUpload(stream, false);
+			sopcache->pBHandle.deviceUpload(main_stream, false);
 
 			boss.end();
 		}
@@ -104,6 +104,10 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 			nanovdb::Coord* h_coords = nullptr;
 			float* h_values = nullptr;
 			size_t count = 0;
+
+			cudaStream_t stream;
+			cudaStreamCreate(&stream);
+
 
 			{
 				ScopedTimer timer("Converting " + grid->getName() + " to NanoVDB");
@@ -153,12 +157,14 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 
 			delete[] h_coords;
 			delete[] h_values;
+
+			cudaStreamDestroy(stream);
 		}
 
 		boss.end();
 	}
 
-	cudaStreamDestroy(stream);
+	cudaStreamDestroy(main_stream);
 }
 
 

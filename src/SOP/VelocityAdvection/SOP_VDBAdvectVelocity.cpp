@@ -125,15 +125,15 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 		ScopedTimer timer("Building Grid " + AGrid->getName());
 
 		const openvdb::VectorGrid::Ptr grid = openvdb::VectorGrid::create();
-		grid->setGridClass(openvdb::GRID_FOG_VOLUME);
+		grid->setGridClass(openvdb::GRID_STAGGERED);
 		grid->setVectorType(openvdb::VEC_CONTRAVARIANT_RELATIVE);
 		grid->setTransform(openvdb::math::Transform::createLinearTransform(voxelSize));
 
 		auto accessor = grid->getAccessor();
 
 		for (size_t i = 0; i < count; ++i) {
-			auto& coord = h_coords[i];
-			auto& value = h_values[i];
+			const auto& coord = h_coords[i];
+			const auto& value = h_values[i];
 
 			accessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()),
 			                  openvdb::Vec3f(value[0], value[1], value[2]));
