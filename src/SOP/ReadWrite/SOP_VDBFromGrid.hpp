@@ -12,13 +12,9 @@
 #include <nanovdb/util/CreateNanoGrid.h>
 #include <nanovdb/util/NanoToOpenVDB.h>
 
-#include "SOP_VDBFromGrid.proto.h"
+#include "Utils/GridData.hpp"
 
-struct Grid {
-	std::vector<openvdb::Coord> coords{};
-	std::vector<float> values{};
-	float voxelSize = 0.5f;
-};
+#include "SOP_VDBFromGrid.proto.h"
 
 class SOP_HNanoVDBFromGrid final : public SOP_Node {
    public:

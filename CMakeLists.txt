@@ -38,6 +38,7 @@ add_library(Utils STATIC
         src/Utils/ScopedTimer.hpp
         src/Utils/CudaStreamWrapper.hpp
         src/Utils/OpenToNano.hpp
+        src/Utils/GridData.hpp
 )
 target_link_libraries(Utils PRIVATE
         Houdini

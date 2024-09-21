@@ -12,7 +12,22 @@
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
 
-extern "C" void pointToGrid(const Grid& gridData, nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>&);
+extern "C" void pointToGrid(const std::vector<nanovdb::Coord>& coords, const std::vector<float>& values, float voxelSize, NanoFloatGrid& out_data);
+
+
+// Assuming openvdb::Coord and nanovdb::Coord have compatible constructors
+std::vector<nanovdb::Coord> convertCoordVector(const std::vector<openvdb::Coord>& openVDBCoords) {
+	std::vector<nanovdb::Coord> nanoCoords;
+	nanoCoords.reserve(openVDBCoords.size());  // Preallocate for efficiency
+
+	std::transform(openVDBCoords.begin(), openVDBCoords.end(), std::back_inserter(nanoCoords),
+		[](const openvdb::Coord& coord) {
+			return nanovdb::Coord(coord.x(), coord.y(), coord.z());
+		});
+
+	return nanoCoords;
+}
+
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 {
@@ -77,13 +92,20 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
 	}
 
-	openvdb::Coord* pos = nullptr;
-	float* value = nullptr;
-
+	std::vector<openvdb::Coord> pos;
+	std::vector<float> value;
 	{
 		ScopedTimer timer("Extracting points from input geometry");
-		extractFromOpenVDB(grid, pos, value, 0);
+		extractFromOpenVDB(grid, pos, value);
+	}
+
+	NanoFloatGrid out_data;
+	{
+		ScopedTimer timer("Creating NanoVDB grid");
+		const auto nanoPos = convertCoordVector(pos);
+		pointToGrid(nanoPos, value, sopparms.getVoxelsize(), out_data);
 	}
 
 
 }
+

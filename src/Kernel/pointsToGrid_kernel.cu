@@ -2,28 +2,25 @@
 #include <nanovdb/util/cuda/CudaPointsToGrid.cuh>
 
 #include "utils.cuh"
+#include "../Utils/GridData.hpp"
 
-struct Grid {
-	std::vector<nanovdb::Coord> coords{};
-	std::vector<float> values{};
-	float voxelSize = 0.5f;
-};
 
-extern "C" void pointToGrid(const Grid& gridData, nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& out_handle) {
+extern "C" void pointToGrid(const std::vector<nanovdb::Coord>& coords, const std::vector<float>& values, const float voxelSize, NanoFloatGrid& out_data) {
 
-	const size_t npoints = gridData.coords.size();
+
+	const size_t npoints = coords.size();
 	nanovdb::Coord* d_coords = nullptr;
 	cudaCheck(cudaMalloc(&d_coords, npoints * sizeof(nanovdb::Coord)));
-	cudaCheck(cudaMemcpyAsync(d_coords, gridData.coords.data(), npoints * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice));
+	cudaCheck(cudaMemcpyAsync(d_coords, coords.data(), npoints * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice));
 
 	// Generate a NanoVDB grid that contains the list of voxels on the device
-	out_handle = nanovdb::cudaVoxelsToGrid<float>(d_coords, npoints, gridData.voxelSize);
-	nanovdb::FloatGrid* d_grid = out_handle.deviceGrid<float>();
+	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> handle = nanovdb::cudaVoxelsToGrid<float>(d_coords, npoints, voxelSize);
+	nanovdb::FloatGrid* d_grid = handle.deviceGrid<float>();
 
 	// Define a list of values and copy them to the device
 	float *d_values;
 	cudaCheck(cudaMalloc(&d_values, npoints * sizeof(float)));
-	cudaCheck(cudaMemcpyAsync(d_values, gridData.values.data(), npoints * sizeof(float), cudaMemcpyHostToDevice));
+	cudaCheck(cudaMemcpyAsync(d_values, values.data(), npoints * sizeof(float), cudaMemcpyHostToDevice));
 
 	// Synchronize to ensure all data is copied before launching the kernel
 	cudaCheck(cudaDeviceSynchronize());
@@ -37,6 +34,12 @@ extern "C" void pointToGrid(const Grid& gridData, nanovdb::GridHandle<nanovdb::C
 		const nanovdb::Coord &ijk = d_coords[tid];
 		d_grid->tree().set<OpT>(ijk, d_values[tid]);// normally one should use a ValueAccessor
 	}); cudaCheckError();
+
+
+	cudaCheck(cudaMalloc(&out_data.pValues, sizeof(float) * npoints));
+	cudaCheck(cudaMalloc(&out_data.pCoords, sizeof(nanovdb::Coord) * npoints));
+	cudaCheck(cudaMemcpyAsync(out_data.pValues, d_values, sizeof(float), cudaMemcpyDeviceToHost));
+	cudaCheck(cudaMemcpyAsync(out_data.pCoords, d_grid, sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost));
 
 	// free arrays allocated on the device
 	cudaCheck(cudaFree(d_coords));
