@@ -4,12 +4,13 @@
 
 #pragma once
 
+#include <concurrent_vector.h>
 #include <openvdb/openvdb.h>
 #include <openvdb/tree/NodeManager.h>
-#include <concurrent_vector.h>
 
-#include <vector>
-#include <memory>
+#include <execution>
+
+#include "GridData.hpp"
 
 // iterate over openvdb grid
 // launch a kernel with the [pos, value] pairs
@@ -20,34 +21,41 @@
 // see : https://github.com/danrbailey/siggraph2023_openvdb/blob/master/benchmarks/cloud_value_clamp/main.cpp
 // for Multi-threaded OpenVDB iteration
 
-inline void extractFromOpenVDB(const openvdb::FloatGrid::ConstPtr& grid, std::vector<openvdb::Coord>& pos, std::vector<float>& value) {
+template <typename GridT, typename CoordT, typename ValueT>
+inline void extractFromOpenVDB(const typename GridT::ConstPtr& grid, GridData<CoordT, ValueT>& out_data) {
+	const auto& tree = grid->tree();
+	out_data.size = tree.activeVoxelCount();
+	out_data.pCoords = new CoordT[out_data.size];
+	out_data.pValues = new ValueT[out_data.size];
 
+	std::atomic<size_t> writePos{0};
+	constexpr size_t chunkSize = 64;
 
-	const openvdb::FloatTree& tree = grid->tree();
+	openvdb::tree::NodeManager<const typename GridT::TreeType> nodeManager(tree);
+	nodeManager.foreachTopDown([&](const auto& node) {
+		std::vector<CoordT> localCoords;
+		std::vector<ValueT> localValues;
+		localCoords.reserve(chunkSize);  // Avoid dynamic resizing
+		localValues.reserve(chunkSize);
 
-	// Estimate the size to avoid frequent reallocations
-	const size_t estimatedSize = tree.activeVoxelCount();
+		for (auto iter = node.cbeginValueOn(); iter; ++iter) {
+			localCoords.push_back(iter.getCoord());
+			localValues.push_back(iter.getValue());
 
-	// Create a memory resource (e.g., a monotonic buffer)
-	std::pmr::monotonic_buffer_resource mbr;
-
-	// Create pmr::vectors using the custom memory resource
-	std::pmr::vector<openvdb::Coord> posVector(&mbr);
-	std::pmr::vector<float> valueVector(&mbr);
-
-	posVector.reserve(estimatedSize);
-	valueVector.reserve(estimatedSize);
-
-	auto getOp = [&](const auto& node) {
-		for (auto iter = node.beginValueOn(); iter; ++iter) {
-			posVector.push_back(iter.getCoord());
-			valueVector.push_back(iter.getValue());
+			if (localCoords.size() >= chunkSize) {
+				const size_t pos = writePos.fetch_add(chunkSize);
+				std::copy(localCoords.begin(), localCoords.end(), out_data.pCoords + pos);
+				std::copy(localValues.begin(), localValues.end(), out_data.pValues + pos);
+				localCoords.clear();
+				localValues.clear();
+			}
 		}
-	};
 
-	openvdb::tree::NodeManager<const openvdb::FloatTree> nodeManager(tree);
-	nodeManager.foreachTopDown(getOp);
-
-	pos = std::vector<openvdb::Coord>(posVector.begin(), posVector.end());
-	value = std::vector<float>(valueVector.begin(), valueVector.end());
+		if (!localCoords.empty()) {
+			const size_t pos = writePos.fetch_add(localCoords.size());
+			std::copy(localCoords.begin(), localCoords.end(), out_data.pCoords + pos);
+			std::copy(localValues.begin(), localValues.end(), out_data.pValues + pos);
+		}
+	});
 }
+

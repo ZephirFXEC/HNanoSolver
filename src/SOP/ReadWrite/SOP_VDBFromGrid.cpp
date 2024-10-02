@@ -12,7 +12,7 @@
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
 
-extern "C" void pointToGrid(const std::vector<nanovdb::Coord>& coords, const std::vector<float>& values, float voxelSize, NanoFloatGrid& out_data);
+extern "C" void pointToGrid(const OpenFloatGrid& in_data, float voxelSize, NanoFloatGrid& out_data);
 
 
 // Assuming openvdb::Coord and nanovdb::Coord have compatible constructors
@@ -87,23 +87,47 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 			grid = vdb;
 		}
 	}
-
 	if (grid == nullptr) {
 		cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
 	}
 
-	std::vector<openvdb::Coord> pos;
-	std::vector<float> value;
+	OpenFloatGrid open_out_data;
 	{
-		ScopedTimer timer("Extracting points from input geometry");
-		extractFromOpenVDB(grid, pos, value);
+		ScopedTimer timer("Extracting voxels from " + grid->getName());
+		extractFromOpenVDB<openvdb::FloatGrid, openvdb::Coord, float>(grid, open_out_data);
 	}
 
 	NanoFloatGrid out_data;
 	{
-		ScopedTimer timer("Creating NanoVDB grid");
-		const auto nanoPos = convertCoordVector(pos);
-		pointToGrid(nanoPos, value, sopparms.getVoxelsize(), out_data);
+		ScopedTimer timer("Creating " + grid->getName() + " NanoVDB grid");
+
+		out_data.size = open_out_data.size;
+		out_data.pCoords = new nanovdb::Coord[out_data.size];
+		out_data.pValues = new float[out_data.size];
+
+		pointToGrid(open_out_data, sopparms.getVoxelsize(), out_data);
+
+	}
+
+	detail->clearAndDestroy();
+
+	{
+		ScopedTimer timer("Building " + grid->getName()  + " grid");
+
+		openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create();
+		out->setGridClass(openvdb::GRID_FOG_VOLUME);
+		out->setTransform(openvdb::math::Transform::createLinearTransform(sopparms.getVoxelsize()));
+		out->setName(grid->getName());
+
+		auto accessor = out->getAccessor();
+
+		for (size_t i = 0; i < out_data.size; ++i) {
+			const auto& coord = out_data.pCoords[i];
+			const float value = out_data.pValues[i];
+			accessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
+		}
+
+		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
 	}
 
 
