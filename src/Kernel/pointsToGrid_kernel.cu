@@ -22,7 +22,6 @@ extern "C" void pointToGrid(const OpenFloatGrid& in_data, const float voxelSize,
 	cudaCheck(cudaMalloc(&d_values, npoints * sizeof(float)));
 	cudaCheck(cudaMemcpyAsync(d_values,  in_data.pValues, npoints * sizeof(float), cudaMemcpyHostToDevice));
 
-	// Synchronize to ensure all data is copied before launching the kernel
 	cudaCheck(cudaDeviceSynchronize());
 
 	// Launch a device kernel that sets the values of voxels define above and prints them
@@ -30,9 +29,12 @@ extern "C" void pointToGrid(const OpenFloatGrid& in_data, const float voxelSize,
 	const unsigned int numBlocks = blocksPerGrid(npoints, numThreads);
 	using OpT = nanovdb::SetVoxel<float>;
 
+	// TODO: find a way to create my  ValueAccessor
+	//nanovdb::build::ValueAccessor<nanovdb::FloatTree> accessor(d_grid->tree());
+
 	lambdaKernel<<<numBlocks, numThreads>>>(npoints, [=] __device__(const size_t tid) {
 		const nanovdb::Coord &ijk = d_coords[tid];
-		d_grid->tree().set<OpT>(ijk, d_values[tid]);// normally one should use a ValueAccessor
+		d_grid->tree().set<OpT>(ijk, d_values[tid]);
 	}); cudaCheckError();
 
 	cudaCheck(cudaDeviceSynchronize());
@@ -40,7 +42,6 @@ extern "C" void pointToGrid(const OpenFloatGrid& in_data, const float voxelSize,
 	cudaCheck(cudaMemcpyAsync(out_data.pValues, d_values, sizeof(float) * npoints, cudaMemcpyDeviceToHost));
 	cudaCheck(cudaMemcpyAsync(out_data.pCoords, d_coords, sizeof(nanovdb::Coord) * npoints, cudaMemcpyDeviceToHost));
 
-	// free arrays allocated on the device
 	cudaCheck(cudaFree(d_coords));
 	cudaCheck(cudaFree(d_values));
 }

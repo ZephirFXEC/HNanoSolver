@@ -119,12 +119,28 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		out->setTransform(openvdb::math::Transform::createLinearTransform(sopparms.getVoxelsize()));
 		out->setName(grid->getName());
 
-		auto accessor = out->getAccessor();
+		openvdb::tree::ValueAccessor<openvdb::FloatTree> valueAccessor(out->tree());
+
+		/*
+		 * Adding/Removing Nodes under Same Parent is Not Thread-Safe
+		 * Adding/Removing Nodes under Different Parents is Thread-Safe
+		 * TODO: find a way to multithread this by adding nodes under different parents
+		 *
+		UTparallelFor(UT_BlockedRange<int64>(0, out_data.size), [&](const UT_BlockedRange<int64> &range) {
+			for (int64 i = range.begin(); i != range.end(); ++i) {
+				const auto& coord = out_data.pCoords[i];
+				const float value = out_data.pValues[i];
+				valueAccessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
+			}
+		});
+		*
+		*
+		*/
 
 		for (size_t i = 0; i < out_data.size; ++i) {
 			const auto& coord = out_data.pCoords[i];
 			const float value = out_data.pValues[i];
-			accessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
+			valueAccessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
 		}
 
 		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());

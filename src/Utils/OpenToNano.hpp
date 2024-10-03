@@ -4,13 +4,12 @@
 
 #pragma once
 
-#include <concurrent_vector.h>
+#include <GU/GU_PrimVDB.h>
 #include <openvdb/openvdb.h>
 #include <openvdb/tree/NodeManager.h>
 
-#include <execution>
-
 #include "GridData.hpp"
+#include "ScopedTimer.hpp"
 
 // iterate over openvdb grid
 // launch a kernel with the [pos, value] pairs
