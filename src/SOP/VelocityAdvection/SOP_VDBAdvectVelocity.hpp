@@ -44,18 +44,7 @@ class SOP_HNanoAdvectVelocity final : public SOP_Node {
 class SOP_HNanoAdvectVelocityCache final : public SOP_NodeCache {
    public:
 	SOP_HNanoAdvectVelocityCache() : SOP_NodeCache() {}
-	~SOP_HNanoAdvectVelocityCache() override {
-		if (!pAHandle.isEmpty()) {
-			pAHandle.reset();
-		}
-
-		if (!pBHandle.isEmpty()) {
-			pBHandle.reset();
-		}
-	}
-
-	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pAHandle;
-	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pBHandle;
+	~SOP_HNanoAdvectVelocityCache() override = default;
 };
 
 class SOP_HNanoAdvectVelocityVerb final : public SOP_NodeVerb {

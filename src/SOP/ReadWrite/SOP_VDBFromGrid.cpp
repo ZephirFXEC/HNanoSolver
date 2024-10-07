@@ -3,30 +3,12 @@
 //
 
 #include "SOP_VDBFromGrid.hpp"
-
-#include <GA/GA_SplittableRange.h>
 #include <UT/UT_DSOVersion.h>
-#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
-
 #include "Utils/OpenToNano.hpp"
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
 
-extern "C" void pointToGrid(const OpenFloatGrid& in_data, float voxelSize, NanoFloatGrid& out_data);
-
-
-// Assuming openvdb::Coord and nanovdb::Coord have compatible constructors
-std::vector<nanovdb::Coord> convertCoordVector(const std::vector<openvdb::Coord>& openVDBCoords) {
-	std::vector<nanovdb::Coord> nanoCoords;
-	nanoCoords.reserve(openVDBCoords.size());  // Preallocate for efficiency
-
-	std::transform(openVDBCoords.begin(), openVDBCoords.end(), std::back_inserter(nanoCoords),
-		[](const openvdb::Coord& coord) {
-			return nanovdb::Coord(coord.x(), coord.y(), coord.z());
-		});
-
-	return nanoCoords;
-}
+extern "C" void pointToGridFloat(const OpenFloatGrid& in_data, float voxelSize, NanoFloatGrid& out_data);
 
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
@@ -105,8 +87,7 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		out_data.pCoords = new nanovdb::Coord[out_data.size];
 		out_data.pValues = new float[out_data.size];
 
-		pointToGrid(open_out_data, sopparms.getVoxelsize(), out_data);
-
+		pointToGridFloat(open_out_data, sopparms.getVoxelsize(), out_data);
 	}
 
 	detail->clearAndDestroy();

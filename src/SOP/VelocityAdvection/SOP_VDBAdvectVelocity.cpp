@@ -11,7 +11,7 @@
 #include "Utils/Utils.hpp"
 
 
-extern "C" void advect_points_to_grid(const OpenVectorGrid& in_data, NanoVectorGrid& out_data, const float voxelSize, const float dt, const cudaStream_t& stream);
+extern "C" void advect_points_to_grid_v(const OpenVectorGrid& in_data, NanoVectorGrid& out_data, const float voxelSize, const float dt, const cudaStream_t& stream);
 
 
 void newSopOperator(OP_OperatorTable* table) {
@@ -68,6 +68,9 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 		err = cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
 	}
 
+	cudaStream_t stream;
+	cudaStreamCreate(&stream);
+
 	OpenVectorGrid open_out_data;
 	{
 		ScopedTimer timer("Extracting voxels from " + AGrid->getName());
@@ -80,12 +83,11 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 		boss.start(name);
 		ScopedTimer timer(name);
 
-		cudaStream_t stream;
-		cudaStreamCreate(&stream);
+
 		const float voxelSize = static_cast<float>(AGrid->voxelSize()[0]);
 		const float deltaTime = static_cast<float>(sopparms.getTimestep());
 
-		advect_points_to_grid(open_out_data, out_data, voxelSize, deltaTime, stream);
+		advect_points_to_grid_v(open_out_data, out_data, voxelSize, deltaTime, stream);
 
 		boss.end();
 	}
@@ -94,13 +96,12 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 		ScopedTimer timer("Building Grid " + AGrid->getName());
 
 		const openvdb::VectorGrid::Ptr grid = openvdb::VectorGrid::create();
-		grid->setGridClass(openvdb::GRID_STAGGERED);
+		grid->setGridClass(openvdb::GRID_FOG_VOLUME);
 		grid->setVectorType(openvdb::VEC_CONTRAVARIANT_RELATIVE);
 		grid->setTransform(openvdb::math::Transform::createLinearTransform(AGrid->voxelSize()[0]));
 
 		openvdb::tree::ValueAccessor<openvdb::VectorTree> accessor(grid->tree());
 
-		// Can crash due to nullptr in pCoords or pValues
 		for (size_t i = 0; i < out_data.size; ++i) {
 			const auto& coord = out_data.pCoords[i];
 			const auto& value = out_data.pValues[i];
@@ -112,10 +113,7 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 		GU_PrimVDB::buildFromGrid(*detail, grid, nullptr, AGrid->getName().c_str());
 	}
 
-	delete[] out_data.pCoords;
-	delete[] out_data.pValues;
-	delete[] open_out_data.pCoords;
-	delete[] open_out_data.pValues;
+	cudaStreamDestroy(stream);
 }
 
 

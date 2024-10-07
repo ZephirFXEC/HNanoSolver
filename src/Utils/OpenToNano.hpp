@@ -28,7 +28,7 @@ inline void extractFromOpenVDB(const typename GridT::ConstPtr& grid, GridData<Co
 	out_data.pValues = new ValueT[out_data.size];
 
 	std::atomic<size_t> writePos{0};
-	constexpr size_t chunkSize = 128;
+	constexpr size_t chunkSize = 256;
 
 	openvdb::tree::NodeManager<const typename GridT::TreeType> nodeManager(tree);
 	nodeManager.foreachTopDown([&](const auto& node) {

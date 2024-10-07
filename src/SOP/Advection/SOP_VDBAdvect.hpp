@@ -10,6 +10,7 @@
 #include <nanovdb/util/cuda/CudaDeviceBuffer.h>
 
 #include "SOP_VDBAdvect.proto.h"
+#include "Utils/GridData.hpp"
 #include "Utils/Utils.hpp"
 
 class SOP_HNanoVDBAdvect final : public SOP_Node {
@@ -82,3 +83,9 @@ class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
 extern "C" void thrust_kernel(const nanovdb::FloatGrid* device, const nanovdb::Vec3fGrid* vel, size_t leaf,
                               float voxelSize, float dt, cudaStream_t stream, nanovdb::Coord* h_coords, float* h_values,
                               size_t& count);
+
+extern "C" void pointToGridVectorToDevice(const OpenVectorGrid& in_data, const float voxelSize,
+                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle);
+
+extern "C" void advect_points_to_grid_f(const OpenFloatGrid& in_data, const nanovdb::Vec3fGrid* vel_grid,
+                                        NanoFloatGrid& out_data, float voxelSize, float dt, const cudaStream_t& stream);

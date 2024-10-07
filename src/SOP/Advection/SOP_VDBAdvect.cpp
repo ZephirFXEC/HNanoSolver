@@ -5,8 +5,8 @@
 #include <GU/GU_PrimVolume.h>
 #include <UT/UT_DSOVersion.h>
 
+#include "Utils/OpenToNano.hpp"
 #include "Utils/ScopedTimer.hpp"
-#include "Utils/Utils.hpp"
 
 
 void newSopOperator(OP_OperatorTable* table) {
@@ -81,59 +81,45 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 	}
 
 
-	cudaStream_t main_stream;
-	cudaStreamCreate(&main_stream);
-
 	{
 		boss.start();
 		ScopedTimer timer("Total Advection");
 
+		OpenVectorGrid vel_out_data;
 		{
-			boss.start();
-			ScopedTimer timer("Creating NanoVDB Velocity grids");
-
-			sopcache->pBHandle =
-			    nanovdb::createNanoGrid<openvdb::VectorGrid, nanovdb::Vec3f, nanovdb::CudaDeviceBuffer>(
-			        *BGrid[0], nanovdb::StatsMode::Disable, nanovdb::ChecksumMode::Disable, 0);
-			sopcache->pBHandle.deviceUpload(main_stream, false);
-
-			boss.end();
+			ScopedTimer timer("Extracting voxels from " + BGrid[0]->getName());
+			extractFromOpenVDB<openvdb::VectorGrid, openvdb::Coord, openvdb::Vec3f>(BGrid[0], vel_out_data);
 		}
 
+
+		nanovdb::Vec3fGrid* vel_grid;
+		{
+			ScopedTimer timer("Converting " + BGrid[0]->getName() + " to NanoVDB");
+			pointToGridVectorToDevice(vel_out_data, BGrid[0]->voxelSize()[0], sopcache->pBHandle);
+			vel_grid = sopcache->pBHandle.deviceGrid<nanovdb::Vec3f>();
+		}
+
+		cudaStream_t stream;
+		cudaStreamCreate(&stream);
+
 		for (auto& grid : AGrid) {
-			nanovdb::Coord* h_coords = nullptr;
-			float* h_values = nullptr;
-			size_t count = 0;
-
-			cudaStream_t stream;
-			cudaStreamCreate(&stream);
-
-
+			OpenFloatGrid open_out_data;
 			{
-				ScopedTimer timer("Converting " + grid->getName() + " to NanoVDB");
-
-				sopcache->pAHandle = nanovdb::createNanoGrid<openvdb::FloatGrid, float, nanovdb::CudaDeviceBuffer>(
-				    *grid, nanovdb::StatsMode::Disable, nanovdb::ChecksumMode::Disable, 0);
-				sopcache->pAHandle.deviceUpload(stream, false);
+				ScopedTimer timer("Extracting voxels from " + grid->getName());
+				extractFromOpenVDB<openvdb::FloatGrid, openvdb::Coord, float>(grid, open_out_data);
 			}
 
-
-			float voxelSize = 0.5f;
+			NanoFloatGrid out_data;
 			{
-				ScopedTimer timer("Computing " + grid->getName() + " advection");
+				const auto name = "Computing " + grid->getName() + " advection";
+				boss.start(name.c_str());
+				ScopedTimer timer(name);
 
-				nanovdb::FloatGrid* gpuAGrid = sopcache->pAHandle.deviceGrid<float>();
-				const nanovdb::Vec3fGrid* gpuBGrid = sopcache->pBHandle.deviceGrid<nanovdb::Vec3f>();
-				const nanovdb::FloatGrid* cpuGrid = sopcache->pAHandle.grid<float>();
+				const float voxelSize = static_cast<float>(grid->voxelSize()[0]);
+				const float deltaTime = static_cast<float>(sopparms.getTimestep());
+				advect_points_to_grid_f(open_out_data, vel_grid, out_data, voxelSize, deltaTime, stream);
 
-				const uint32_t leafCount = cpuGrid->tree().nodeCount(0);
-				voxelSize = static_cast<float>(cpuGrid->voxelSize()[0]);
-				const auto deltaTime = static_cast<float>(sopparms.getTimestep());
-
-				h_coords = new nanovdb::Coord[512 * leafCount];
-				h_values = new float[512 * leafCount];
-
-				thrust_kernel(gpuAGrid, gpuBGrid, leafCount, voxelSize, deltaTime, stream, h_coords, h_values, count);
+				boss.end();
 			}
 
 			{
@@ -141,30 +127,23 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 
 				const openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create();
 				out->setGridClass(openvdb::GRID_FOG_VOLUME);
-				out->setTransform(openvdb::math::Transform::createLinearTransform(voxelSize));
-				out->setName(grid->getName());
+				out->setTransform(openvdb::math::Transform::createLinearTransform(grid->voxelSize()[0]));
 
-				auto accessor = grid->getAccessor();
+				openvdb::tree::ValueAccessor<openvdb::FloatTree> accessor(out->tree());
 
-				for (size_t i = 0; i < count; ++i) {
-					auto& coord = h_coords[i];
-					auto& value = h_values[i];
+				for (size_t i = 0; i < out_data.size; ++i) {
+					auto& coord = out_data.pCoords[i];
+					auto value = out_data.pValues[i];
 					accessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
 				}
 
-				GU_PrimVDB::buildFromGrid(*detail, grid, nullptr, out->getName().c_str());
+				GU_PrimVDB::buildFromGrid(*detail, out, nullptr, grid->getName().c_str());
 			}
-
-			delete[] h_coords;
-			delete[] h_values;
-
-			cudaStreamDestroy(stream);
 		}
 
 		boss.end();
+		cudaStreamDestroy(stream);
 	}
-
-	cudaStreamDestroy(main_stream);
 }
 
 

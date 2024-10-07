@@ -10,6 +10,15 @@
 
 template <typename CoordT, typename ValueT>
 struct GridData {
+	GridData() = default;
+	GridData(const CoordT* pCoords, const ValueT* pValues, const size_t size) : pCoords(pCoords), pValues(pValues), size(size) {}
+	GridData(const GridData& other) : pCoords(other.pCoords), pValues(other.pValues), size(other.size) {}
+
+	~GridData() {
+		delete[] pCoords;
+		delete[] pValues;
+	}
+
 	CoordT* pCoords = nullptr;
 	ValueT* pValues = nullptr;
 	size_t size = 0;
