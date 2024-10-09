@@ -69,4 +69,3 @@ class SOP_HNanoVDBProjectNonDivergentVerb final : public SOP_NodeVerb {
 };
 
 
-#endif  // SOP_READWRITETEST_HPP

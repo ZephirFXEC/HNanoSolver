@@ -213,34 +213,6 @@ class HoudiniInterrupter final : public openvdb::util::NullInterrupter {
 };
 
 
-/// @brief Deprecated wrapper class with the same interface as HoudiniInterrupter,
-/// however it does not derive from openvdb::util::NullInterrupter.
-/// Intended for backwards-compatibility only.
-class Interrupter {
-   public:
-	OPENVDB_DEPRECATED_MESSAGE(
-	    "openvdb_houdini::Interrupter has been deprecated, use openvdb_houdini::HoudiniInterrupter")
-	explicit Interrupter(const char* title = nullptr) : mInterrupt(title) {}
-
-	/// @brief Signal the start of an interruptible operation.
-	/// @param name  an optional descriptive name for the operation
-	void start(const char* name = nullptr) { mInterrupt.start(name); }
-	/// Signal the end of an interruptible operation.
-	void end() { mInterrupt.end(); }
-
-	/// @brief Check if an interruptible operation should be aborted.
-	/// @param percent  an optional (when >= 0) percentage indicating
-	///     the fraction of the operation that has been completed
-	bool wasInterrupted(int percent = -1) { return mInterrupt.wasInterrupted(percent); }
-
-	/// @brief Return a reference to the base class of the stored interrupter
-	openvdb::util::NullInterrupter& interrupter() { return mInterrupt.interrupter(); }
-
-   private:
-	HoudiniInterrupter mInterrupt;
-};
-
-
 ////////////////////////////////////////
 
 
@@ -389,5 +361,24 @@ inline bool GridvdbApply(openvdb::GridBase::Ptr& vdb, OpT& op, const bool makeUn
 }
 
 }  // namespace openvdb_houdini
+
+// Custom Utils :
+template <typename GridT>
+static UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, std::vector<typename GridT::Ptr>& grid,
+												  const UT_StringHolder& group) {
+	const GA_PrimitiveGroup* groupRef = aGeo->findPrimitiveGroup(group);
+	for (openvdb_houdini::VdbPrimIterator it(aGeo, groupRef); it; ++it) {
+		if (auto vdb = openvdb::gridPtrCast<GridT>((*it)->getGridPtr())) {
+			grid.push_back(vdb);
+		}
+	}
+
+	if (grid.empty()) {
+		return UT_ERROR_ABORT;
+	}
+
+	return UT_ERROR_NONE;
+}
+
 
 #endif  // OPENVDB_HOUDINI_UTILS_HAS_BEEN_INCLUDED

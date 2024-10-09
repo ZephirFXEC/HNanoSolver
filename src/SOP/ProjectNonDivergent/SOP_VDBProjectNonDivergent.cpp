@@ -6,6 +6,9 @@
 
 #include <UT/UT_DSOVersion.h>
 
+#include <openvdb/openvdb.h>
+#include <nanovdb/NanoVDB.h>
+#include <Utils/Utils.hpp>
 
 const char* const SOP_HNanoVDBProjectNonDivergentVerb::theDsFile = R"THEDSFILE(
 {
@@ -51,4 +54,22 @@ const SOP_NodeVerb* SOP_HNanoVDBProjectNonDivergent::cookVerb() const {
 }
 
 
-void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const {}
+void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const {
+	openvdb_houdini::HoudiniInterrupter boss("Computing VDB grids");
+	const auto& sopparms = cookparms.parms<SOP_VDBProjectNonDivergentParms>();
+	GU_Detail* detail = cookparms.gdh().gdpNC();
+	const GU_Detail* in_geo = cookparms.inputGeo(0);
+
+	openvdb::FloatGrid::ConstPtr grid = nullptr;
+	for (openvdb_houdini::VdbPrimIterator it(in_geo); it; ++it) {
+		if (const auto vdb = openvdb::gridPtrCast<openvdb::FloatGrid>((*it)->getGridPtr())) {
+			grid = vdb;
+		}
+	}
+	if (grid == nullptr) {
+		cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
+	}
+
+
+
+}

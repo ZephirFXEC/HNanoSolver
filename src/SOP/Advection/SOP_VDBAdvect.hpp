@@ -70,22 +70,14 @@ class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
 
 	CookMode cookMode(const SOP_NodeParms* parms) const override { return COOK_GENERATOR; }
 
-	template <typename GridT>
-	[[nodiscard]] UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, std::vector<typename GridT::Ptr>& grid,
-	                                        const UT_StringHolder& group) const;
-
 
 	void cook(const CookParms& cookparms) const override;
 	static const Register<SOP_HNanoVDBAdvectVerb> theVerb;
 	static const char* const theDsFile;
 };
 
-extern "C" void thrust_kernel(const nanovdb::FloatGrid* device, const nanovdb::Vec3fGrid* vel, size_t leaf,
-                              float voxelSize, float dt, cudaStream_t stream, nanovdb::Coord* h_coords, float* h_values,
-                              size_t& count);
-
-extern "C" void pointToGridVectorToDevice(const OpenVectorGrid& in_data, const float voxelSize,
-                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle);
+extern "C" void pointToGridVectorToDevice(const OpenVectorGrid& in_data, float voxelSize,
+                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream);
 
 extern "C" void advect_points_to_grid_f(const OpenFloatGrid& in_data, const nanovdb::Vec3fGrid* vel_grid,
                                         NanoFloatGrid& out_data, float voxelSize, float dt, const cudaStream_t& stream);

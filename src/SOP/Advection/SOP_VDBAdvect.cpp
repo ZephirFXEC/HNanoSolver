@@ -91,16 +91,15 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 			extractFromOpenVDB<openvdb::VectorGrid, openvdb::Coord, openvdb::Vec3f>(BGrid[0], vel_out_data);
 		}
 
+		cudaStream_t stream;
+		cudaStreamCreate(&stream);
 
 		nanovdb::Vec3fGrid* vel_grid;
 		{
 			ScopedTimer timer("Converting " + BGrid[0]->getName() + " to NanoVDB");
-			pointToGridVectorToDevice(vel_out_data, BGrid[0]->voxelSize()[0], sopcache->pBHandle);
+			pointToGridVectorToDevice(vel_out_data, BGrid[0]->voxelSize()[0], sopcache->pBHandle, stream);
 			vel_grid = sopcache->pBHandle.deviceGrid<nanovdb::Vec3f>();
 		}
-
-		cudaStream_t stream;
-		cudaStreamCreate(&stream);
 
 		for (auto& grid : AGrid) {
 			OpenFloatGrid open_out_data;
@@ -144,24 +143,6 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 		boss.end();
 		cudaStreamDestroy(stream);
 	}
-}
-
-
-template <typename GridT>
-UT_ErrorSeverity SOP_HNanoVDBAdvectVerb::loadGrid(const GU_Detail* aGeo, std::vector<typename GridT::Ptr>& grid,
-                                                  const UT_StringHolder& group) const {
-	const GA_PrimitiveGroup* groupRef = aGeo->findPrimitiveGroup(group);
-	for (openvdb_houdini::VdbPrimIterator it(aGeo, groupRef); it; ++it) {
-		if (auto vdb = openvdb::gridPtrCast<GridT>((*it)->getGridPtr())) {
-			grid.push_back(vdb);
-		}
-	}
-
-	if (grid.empty()) {
-		return UT_ERROR_ABORT;
-	}
-
-	return UT_ERROR_NONE;
 }
 
 

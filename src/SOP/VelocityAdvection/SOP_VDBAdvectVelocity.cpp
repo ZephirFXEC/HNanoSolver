@@ -5,14 +5,9 @@
 #include <GU/GU_PrimVolume.h>
 #include <UT/UT_DSOVersion.h>
 
-#include "Utils/GridData.hpp"
 #include "Utils/OpenToNano.hpp"
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
-
-
-extern "C" void advect_points_to_grid_v(const OpenVectorGrid& in_data, NanoVectorGrid& out_data, const float voxelSize, const float dt, const cudaStream_t& stream);
-
 
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanoadvectvelocity", "HNanoAdvectVelocity",

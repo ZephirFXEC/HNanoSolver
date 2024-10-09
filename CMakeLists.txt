@@ -28,6 +28,7 @@ houdini_generate_proto_headers( FILES
         src/SOP/Advection/SOP_VDBAdvect.cpp
         src/SOP/ReadWrite/SOP_VDBFromGrid.cpp
         src/SOP/VelocityAdvection/SOP_VDBAdvectVelocity.cpp
+        src/SOP/ProjectNonDivergent/SOP_VDBProjectNonDivergent.cpp
 )
 
 ########################  Utils library ########################################################################
