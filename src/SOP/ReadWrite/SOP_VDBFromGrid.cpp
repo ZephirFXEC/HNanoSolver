@@ -3,30 +3,29 @@
 //
 
 #include "SOP_VDBFromGrid.hpp"
+
 #include <UT/UT_DSOVersion.h>
+#include <cuda_runtime_api.h>
+#include <driver_types.h>
+
 #include "Utils/OpenToNano.hpp"
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
 
-extern "C" void pointToGridFloat(const OpenFloatGrid& in_data, float voxelSize, NanoFloatGrid& out_data);
+extern "C" void pointToGridFloat(const OpenFloatGrid& in_data, float voxelSize, NanoFloatGrid& out_data, const cudaStream_t& stream);
 
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 {
     name        parameters
     parm {
-        name        "attribs"
-        label       "Attribute to rasterize"
-        type        string
-        default     { "density" }
-        parmtag     { "sop_input" "0" }
-    }
-    parm {
-        name    "div"
-        label   "Divisions"
-        type    integer
-        default { "1" }
-        range   { 1! 12 }
+		name	"agroup"
+		label	"Density Volumes"
+		type	string
+		default	{ "" }
+		parmtag	{ "script_action" "import soputils\nkwargs['geometrytype'] = (hou.geometryType.Primitives,)\nkwargs['inputindex'] = 0\nsoputils.selectGroupParm(kwargs)" }
+		parmtag	{ "script_action_help" "Select geometry from an available viewport.\nShift-click to turn on Select Groups." }
+		parmtag	{ "script_action_icon" "BUTTONS_reselect" }
     }
 	parm {
 		name "voxelsize"
@@ -41,7 +40,7 @@ const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 PRM_Template* SOP_HNanoVDBFromGrid::buildTemplates() {
 	static PRM_TemplateBuilder templ("SOP_VDBFromGrid.cpp", SOP_HNanoVDBFromGridVerb::theDsFile);
 	if (templ.justBuilt()) {
-		templ.setChoiceListPtr("attribs", &SOP_Node::pointAttribMenu);
+		templ.setChoiceListPtr("agroup", &SOP_Node::namedVolumesMenu);
 	}
 	return templ.templates();
 }
@@ -63,42 +62,40 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	GU_Detail* detail = cookparms.gdh().gdpNC();
 	const GU_Detail* in_geo = cookparms.inputGeo(0);
 
-	openvdb::FloatGrid::ConstPtr grid = nullptr;
-	for (openvdb_houdini::VdbPrimIterator it(in_geo); it; ++it) {
-		if (const auto vdb = openvdb::gridPtrCast<openvdb::FloatGrid>((*it)->getGridPtr())) {
-			grid = vdb;
-		}
+	std::vector<openvdb::FloatGrid::Ptr> AGrid;
+	if (auto err = loadGrid<openvdb::FloatGrid>(in_geo, AGrid, sopparms.getAgroup()); err != UT_ERROR_NONE) {
+		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load grids");
 	}
-	if (grid == nullptr) {
-		cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
-	}
+
+	cudaStream_t stream;
+	cudaStreamCreate(&stream);
 
 	OpenFloatGrid open_out_data;
 	{
-		ScopedTimer timer("Extracting voxels from " + grid->getName());
-		extractFromOpenVDB<openvdb::FloatGrid, openvdb::Coord, float>(grid, open_out_data);
+		ScopedTimer timer("Extracting voxels from " + AGrid[0]->getName());
+		extractFromOpenVDB<openvdb::FloatGrid, openvdb::Coord, float>(AGrid[0], open_out_data);
 	}
 
 	NanoFloatGrid out_data;
 	{
-		ScopedTimer timer("Creating " + grid->getName() + " NanoVDB grid");
+		ScopedTimer timer("Creating " + AGrid[0]->getName() + " NanoVDB grid");
 
 		out_data.size = open_out_data.size;
 		out_data.pCoords = new nanovdb::Coord[out_data.size];
 		out_data.pValues = new float[out_data.size];
 
-		pointToGridFloat(open_out_data, sopparms.getVoxelsize(), out_data);
+		pointToGridFloat(open_out_data, sopparms.getVoxelsize(), out_data, stream);
 	}
 
 	detail->clearAndDestroy();
 
 	{
-		ScopedTimer timer("Building " + grid->getName()  + " grid");
+		ScopedTimer timer("Building " + AGrid[0]->getName()  + " grid");
 
 		openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create();
 		out->setGridClass(openvdb::GRID_FOG_VOLUME);
 		out->setTransform(openvdb::math::Transform::createLinearTransform(sopparms.getVoxelsize()));
-		out->setName(grid->getName());
+		out->setName(AGrid[0]->getName());
 
 		openvdb::tree::ValueAccessor<openvdb::FloatTree> valueAccessor(out->tree());
 
@@ -121,10 +118,10 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		for (size_t i = 0; i < out_data.size; ++i) {
 			const auto& coord = out_data.pCoords[i];
 			const float value = out_data.pValues[i];
-			valueAccessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
+			valueAccessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
 		}
 
-		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
+		GU_PrimVDB::buildFromGrid(*detail, out, nullptr,	out->getName().c_str());
 	}
 
 

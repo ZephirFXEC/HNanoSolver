@@ -3,8 +3,8 @@ enable_language(CUDA)
 include_directories("$ENV{HFS}/toolkit/include")
 
 add_library(Kernels STATIC
-        thrust_kernel.cu
-        pointsToGrid_kernel.cu
+        Advection.cu
+        PointToGrid.cu
         utils.cuh
 )
 

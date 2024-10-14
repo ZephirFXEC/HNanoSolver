@@ -9,10 +9,6 @@
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/CreateNanoGrid.h>
-#include <nanovdb/util/NanoToOpenVDB.h>
-
-#include "Utils/GridData.hpp"
 
 #include "SOP_VDBFromGrid.proto.h"
 

@@ -6,8 +6,6 @@
 #include <nanovdb/NanoVDB.h>
 #include <openvdb/openvdb.h>
 
-#pragma once
-
 template <typename CoordT, typename ValueT>
 struct GridData {
 	GridData() = default;

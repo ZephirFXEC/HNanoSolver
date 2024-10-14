@@ -16,7 +16,7 @@ string(APPEND CMAKE_CUDA_FLAGS " --extended-lambda")
 set(CUDA_ATTACH_VS_BUILD_RULE_TO_CUDA_FILE OFF)
 set(BUILD_SHARED_LIBS ON)
 
-add_subdirectory(src/Kernel)
+add_subdirectory(src/Cuda)
 # ------- End CUDA -----------
 
 # ------- Find Houdini -----------
