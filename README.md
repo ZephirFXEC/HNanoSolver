@@ -32,4 +32,5 @@ For a simple simulation with a Density grid and Velocity grid with 6M active vox
 # Reference
 ## Papers 
 - Bridson, R., Muller-Fischer, M. (2007). FLUID SIMULATION SIGGRAPH 2007 Course notes. SIGGRAPH. [this](https://www.cs.ubc.ca/~rbridson/fluidsimulation/fluids_notes.pdf)
-  
+- Gabriel D. Weymouth, Data-driven Multi-Grid solver for accelerated pressure projection, [this](https://www.sciencedirect.com/science/article/pii/S0045793022002213)
+- Williams and Others, fVDB: A Deep-Learning Framework for Sparse, Large-Scale, and High-Performance Spatial Intelligence, [this](https://research.nvidia.com/labs/prl/williams2024fVDB/fVDB.pdf)
