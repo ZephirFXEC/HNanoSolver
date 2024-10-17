@@ -6,7 +6,7 @@ project(HNanoSolver LANGUAGES CXX CUDA)
 
 add_compile_definitions(
         SESI_OPENVDB
-        NANOVDB_USE_OPENVDB
+        TRACY_ENABLE
 )
 
 
@@ -23,6 +23,11 @@ add_subdirectory(src/Cuda)
 list(APPEND CMAKE_PREFIX_PATH "$ENV{HFS}/toolkit/cmake" )
 find_package(Houdini REQUIRED)
 # ------- End Houdini -----------
+
+# ------- Find Tracy ------------
+find_package(Tracy CONFIG REQUIRED)
+# ------- End Tracy ------------
+
 
 houdini_generate_proto_headers( FILES
         src/SOP/Advection/SOP_VDBAdvect.cpp
@@ -60,6 +65,7 @@ target_link_libraries(SOP_Advect PRIVATE
         Utils
         Kernels
         Houdini
+        Tracy::TracyClient
         "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
 target_include_directories(SOP_Advect PRIVATE
@@ -79,6 +85,7 @@ target_link_libraries(SOP_ProjectNonDivergent PRIVATE
         Utils
         Kernels
         Houdini
+        Tracy::TracyClient
         "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
 target_include_directories(SOP_ProjectNonDivergent PRIVATE
@@ -98,6 +105,7 @@ target_link_libraries(SOP_AdvectVelocity PRIVATE
         Utils
         Kernels
         Houdini
+        Tracy::TracyClient
         "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
 target_include_directories(SOP_AdvectVelocity PRIVATE
@@ -117,6 +125,7 @@ target_link_libraries(SOP_VDBFromGrid PRIVATE
         Utils
         Kernels
         Houdini
+        Tracy::TracyClient
         "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
 target_include_directories(SOP_VDBFromGrid PRIVATE
