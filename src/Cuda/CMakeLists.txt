@@ -6,6 +6,7 @@ add_library(Kernels STATIC
         Advection.cu
         PointToGrid.cu
         utils.cuh
+        PressureProjection.cu
 )
 
 target_compile_features(Kernels PUBLIC cxx_std_17)

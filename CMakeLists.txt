@@ -78,6 +78,7 @@ target_include_directories(SOP_Advect PRIVATE
 
 ########################  SOP_ProjectNonDivergent library ##############################################################
 add_library(SOP_ProjectNonDivergent SHARED
+        src/SOP/ProjectNonDivergent/MultigridSolver.hpp
         src/SOP/ProjectNonDivergent/SOP_VDBProjectNonDivergent.cpp
         src/SOP/ProjectNonDivergent/SOP_VDBProjectNonDivergent.hpp
 )

@@ -8,8 +8,8 @@
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/CreateNanoGrid.h>
-#include <nanovdb/util/NanoToOpenVDB.h>
+#include <nanovdb/util/GridHandle.h>
+#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
 
 #include "SOP_VDBProjectNonDivergent.proto.h"
 #include "Utils/GridData.hpp"
@@ -49,7 +49,13 @@ class SOP_HNanoVDBProjectNonDivergent final : public SOP_Node {
 class SOP_HNanoVDBProjectNonDivergentCache final : public SOP_NodeCache {
    public:
 	SOP_HNanoVDBProjectNonDivergentCache() : SOP_NodeCache() {}
-	~SOP_HNanoVDBProjectNonDivergentCache() override = default;
+	~SOP_HNanoVDBProjectNonDivergentCache() override {
+		if (!pHandle.isEmpty()) {
+			pHandle.reset();
+		}
+	}
+
+	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pHandle;
 };
 
 class SOP_HNanoVDBProjectNonDivergentVerb final : public SOP_NodeVerb {
@@ -68,4 +74,7 @@ class SOP_HNanoVDBProjectNonDivergentVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
+extern "C" void pointToGridVectorToDevice(const OpenVectorGrid& in_data, float voxelSize,
+					  nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream);
 
+extern "C" void ComputeDivergence(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& vel_handle, NanoFloatGrid& out_div, const cudaStream_t& stream);
