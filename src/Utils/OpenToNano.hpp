@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include <GU/GU_PrimVDB.h>
 #include <openvdb/openvdb.h>
 #include <openvdb/tree/NodeManager.h>
 
+#include <memory>
+
 #include "GridData.hpp"
-#include "ScopedTimer.hpp"
 
 // iterate over openvdb grid
 // launch a kernel with the [pos, value] pairs
@@ -21,39 +21,78 @@
 // for Multi-threaded OpenVDB iteration
 
 template <typename GridT, typename CoordT, typename ValueT>
-inline void extractFromOpenVDB(const typename GridT::ConstPtr& grid, GridData<CoordT, ValueT>& out_data) {
+void extractFromOpenVDB(const typename GridT::ConstPtr& grid, GridData<CoordT, ValueT>& out_data) {
 	const auto& tree = grid->tree();
 	out_data.size = tree.activeVoxelCount();
-	out_data.pCoords = new CoordT[out_data.size];
-	out_data.pValues = new ValueT[out_data.size];
+
+	// Aligned allocation for better memory access patterns
+	out_data.pCoords = static_cast<CoordT*>(_aligned_malloc(out_data.size * sizeof(CoordT), 64));
+	out_data.pValues = static_cast<ValueT*>(_aligned_malloc(out_data.size * sizeof(ValueT), 64));
+
+	if (!out_data.pCoords || !out_data.pValues) {
+		if (out_data.pCoords) _aligned_free(out_data.pCoords);
+		if (out_data.pValues) _aligned_free(out_data.pValues);
+		throw std::bad_alloc();
+	}
 
 	std::atomic<size_t> writePos{0};
-	constexpr size_t chunkSize = 256;
+	// Increased chunk size for better cache utilization
+	constexpr size_t chunkSize = 1024;
 
+	// Thread-local buffers with MSVC's __declspec(thread)
+#pragma warning(push)
+#pragma warning(disable : 4324)  // structure padding warning
+	struct alignas(64) ThreadLocalBuffers {
+		std::vector<CoordT> coords;
+		std::vector<ValueT> values;
+		char padding[64];  // Prevent false sharing
+	};
+#pragma warning(pop)
+
+	thread_local ThreadLocalBuffers buffers;
 	openvdb::tree::NodeManager<const typename GridT::TreeType> nodeManager(tree);
+
+	// Enable parallel execution if available
 	nodeManager.foreachTopDown([&](const auto& node) {
-		std::vector<CoordT> localCoords;
-		std::vector<ValueT> localValues;
-		localCoords.reserve(chunkSize);  // Avoid dynamic resizing
-		localValues.reserve(chunkSize);
+		auto& localCoords = buffers.coords;
+		auto& localValues = buffers.values;
 
-		for (auto iter = node.cbeginValueOn(); iter; ++iter) {
-			localCoords.push_back(iter.getCoord());
-			localValues.push_back(iter.getValue());
-
-			if (localCoords.size() >= chunkSize) {
-				const size_t pos = writePos.fetch_add(chunkSize);
-				std::copy(localCoords.begin(), localCoords.end(), out_data.pCoords + pos);
-				std::copy(localValues.begin(), localValues.end(), out_data.pValues + pos);
-				localCoords.clear();
-				localValues.clear();
-			}
+		localCoords.clear();
+		localValues.clear();
+		if (localCoords.capacity() < chunkSize) {
+			localCoords.reserve(chunkSize);
+			localValues.reserve(chunkSize);
 		}
 
-		if (!localCoords.empty()) {
-			const size_t pos = writePos.fetch_add(localCoords.size());
-			std::copy(localCoords.begin(), localCoords.end(), out_data.pCoords + pos);
-			std::copy(localValues.begin(), localValues.end(), out_data.pValues + pos);
+		auto iter = node.cbeginValueOn();
+		while (iter) {
+			size_t count = 0;
+			do {
+				localCoords.push_back(iter.getCoord());
+				localValues.push_back(iter.getValue());
+				++iter;
+				++count;
+			} while (count < chunkSize && iter);
+
+			if (count > 0) {
+				const size_t pos = writePos.fetch_add(count);
+				// Use MSVC intrinsics for memory copy if available
+				if constexpr (sizeof(CoordT) % 16 == 0) {
+					__movsq(reinterpret_cast<unsigned __int64*>(out_data.pCoords + pos),
+					        reinterpret_cast<const unsigned __int64*>(localCoords.data()),
+					        (count * sizeof(CoordT)) / 8);
+				} else {
+					memcpy(out_data.pCoords + pos, localCoords.data(), count * sizeof(CoordT));
+				}
+
+				if constexpr (sizeof(ValueT) % 16 == 0) {
+					__movsq(reinterpret_cast<unsigned __int64*>(out_data.pValues + pos),
+					        reinterpret_cast<const unsigned __int64*>(localValues.data()),
+					        (count * sizeof(ValueT)) / 8);
+				} else {
+					memcpy(out_data.pValues + pos, localValues.data(), count * sizeof(ValueT));
+				}
+			}
 		}
 	});
 }

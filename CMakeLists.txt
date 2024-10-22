@@ -9,6 +9,8 @@ add_compile_definitions(
         TRACY_ENABLE
 )
 
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /Ob3 /GL /Qpar /favor:INTEL64  /arch:AVX2")
+set(CMAKE_LINK_FLAGS_RELEASE "${CMAKE_LINK_FLAGS_RELEASE} /LTCG")
 
 # ------- Find CUDA -----------
 find_package(CUDAToolkit REQUIRED)
