@@ -74,7 +74,9 @@ class SOP_HNanoVDBProjectNonDivergentVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
-extern "C" void pointToGridVectorToDevice(const OpenVectorGrid& in_data, float voxelSize,
-					  nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream);
+extern "C" void pointToGridVectorToDevice(const HNS::OpenVectorGrid& in_data, float voxelSize,
+                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle,
+                                          const cudaStream_t& stream);
 
-extern "C" void ComputeDivergence(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& vel_handle, NanoFloatGrid& out_div, const cudaStream_t& stream);
+extern "C" void ComputeDivergence(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& vel_handle,
+                                  HNS::NanoFloatGrid& out_div, const cudaStream_t& stream);

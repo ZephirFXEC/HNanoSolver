@@ -5,7 +5,8 @@
 
 #include <nanovdb/NanoVDB.h>
 #include <openvdb/openvdb.h>
-
+namespace HNS {
+static constexpr size_t ALIGNMENT = 32;
 template <typename CoordT, typename ValueT>
 struct GridData {
 	GridData() = default;
@@ -13,9 +14,26 @@ struct GridData {
 	    : pCoords(pCoords), pValues(pValues), size(size) {}
 	GridData(const GridData& other) : pCoords(other.pCoords), pValues(other.pValues), size(other.size) {}
 
+	void* operator new(const size_t size) {
+		void* ptr = nullptr;
+		ptr = _aligned_malloc(size, ALIGNMENT);
+		if (!ptr) throw std::bad_alloc();
+		return ptr;
+	}
+	void* operator new[](const size_t size) {
+		void* ptr = nullptr;
+		ptr = _aligned_malloc(size, ALIGNMENT);
+		if (!ptr) throw std::bad_alloc();
+		return ptr;
+	}
+
+	void operator delete(void* ptr) { _aligned_free(ptr); }
+	void operator delete[](void* ptr) { _aligned_free(ptr); }
+
 	~GridData() {
 		delete[] pCoords;
 		delete[] pValues;
+		size = 0;
 	}
 
 	CoordT* pCoords = nullptr;
@@ -23,25 +41,29 @@ struct GridData {
 	size_t size = 0;
 };
 
-using NanoFloatGrid = GridData<nanovdb::Coord, float>;
-using NanoVectorGrid = GridData<nanovdb::Coord, nanovdb::Vec3f>;
-using OpenFloatGrid = GridData<openvdb::Coord, float>;
-using OpenVectorGrid = GridData<openvdb::Coord, openvdb::Vec3f>;
+// Base templates for OpenVDB and NanoVDB grids
+template <typename CoordType, typename ValueType>
+using GenericGrid = GridData<CoordType, ValueType>;
 
-template <size_t N, typename CoordT, typename ValueT>
-struct MultiScalar {
-	MultiScalar() = default;
-	MultiScalar(const CoordT* pCoords, const ValueT* pValues, const size_t size) {
-		for (size_t i = 0; i < N; ++i) {
-			data[i] = GridData<CoordT, ValueT>(pCoords, pValues, size);
-		}
-	}
+template <typename T>
+using OpenGrid = GenericGrid<openvdb::Coord, T>;
 
-	~MultiScalar() = default;
+template <typename T>
+using NanoGrid = GenericGrid<nanovdb::Coord, T>;
 
-	GridData<CoordT, ValueT>& operator[](size_t i) { return data[i]; }
-	const GridData<CoordT, ValueT>& operator[](size_t i) const { return data[i]; }
+// Specific grid types with float and vector values
+template <typename CoordType>
+using FloatGrid = GenericGrid<CoordType, float>;
 
-private:
-	std::array<GridData<CoordT, ValueT>, N> data;
-};
+template <typename CoordType>
+using VectorGrid = GenericGrid<CoordType, nanovdb::Vec3f>;
+
+// Typedefs for common OpenVDB and NanoVDB grids
+using OpenFloatGrid = OpenGrid<float>;
+using OpenVectorGrid = OpenGrid<openvdb::Vec3f>;
+
+using NanoFloatGrid = NanoGrid<float>;
+using NanoVectorGrid = NanoGrid<nanovdb::Vec3f>;
+
+
+}  // namespace HNS

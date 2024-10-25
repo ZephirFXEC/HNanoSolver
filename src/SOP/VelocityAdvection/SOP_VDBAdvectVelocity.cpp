@@ -4,10 +4,12 @@
 #include <GU/GU_PrimVDB.h>
 #include <GU/GU_PrimVolume.h>
 #include <UT/UT_DSOVersion.h>
+#include <tbb/enumerable_thread_specific.h>
 
 #include "Utils/OpenToNano.hpp"
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
+
 
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanoadvectvelocity", "HNanoAdvectVelocity",
@@ -66,13 +68,13 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
 
-	OpenVectorGrid open_out_data;
+	HNS::OpenVectorGrid open_out_data;
 	{
 		ScopedTimer timer("Extracting voxels from " + AGrid->getName());
-		extractFromOpenVDB<openvdb::VectorGrid, openvdb::Coord, openvdb::Vec3f>(AGrid, open_out_data);
+		HNS::extractFromOpenVDB<openvdb::VectorGrid, openvdb::Vec3f>(AGrid, open_out_data);
 	}
 
-	NanoVectorGrid out_data;
+	HNS::NanoVectorGrid out_data;
 	{
 		const auto name = "Creating NanoVDB grids and Compute Advection";
 		boss.start(name);
@@ -91,7 +93,7 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 		ScopedTimer timer("Building Grid " + AGrid->getName());
 
 		const openvdb::VectorGrid::Ptr grid = openvdb::VectorGrid::create();
-		grid->setGridClass(openvdb::GRID_FOG_VOLUME);
+		grid->setGridClass(openvdb::GRID_STAGGERED);
 		grid->setVectorType(openvdb::VEC_CONTRAVARIANT_RELATIVE);
 		grid->setTransform(openvdb::math::Transform::createLinearTransform(AGrid->voxelSize()[0]));
 
@@ -101,8 +103,8 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 			const auto& coord = out_data.pCoords[i];
 			const auto& value = out_data.pValues[i];
 
-			accessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()),
-			                  openvdb::Vec3f(value[0], value[1], value[2]));
+			accessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()),
+			                    openvdb::Vec3f(value[0], value[1], value[2]));
 		}
 
 		GU_PrimVDB::buildFromGrid(*detail, grid, nullptr, AGrid->getName().c_str());

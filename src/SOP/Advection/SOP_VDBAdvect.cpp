@@ -85,10 +85,10 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 		boss.start();
 		ScopedTimer timer("Total Advection");
 
-		OpenVectorGrid vel_out_data;
+		HNS::OpenVectorGrid vel_out_data;
 		{
 			ScopedTimer timer("Extracting voxels from " + BGrid[0]->getName());
-			extractFromOpenVDB<openvdb::VectorGrid, openvdb::Coord, openvdb::Vec3f>(BGrid[0], vel_out_data);
+			HNS::extractFromOpenVDB<openvdb::VectorGrid, openvdb::Vec3f>(BGrid[0], vel_out_data);
 		}
 
 		cudaStream_t stream;
@@ -102,13 +102,13 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 		}
 
 		for (auto& grid : AGrid) {
-			OpenFloatGrid open_out_data;
+			HNS::OpenFloatGrid open_out_data;
 			{
 				ScopedTimer timer("Extracting voxels from " + grid->getName());
-				extractFromOpenVDB<openvdb::FloatGrid, openvdb::Coord, float>(grid, open_out_data);
+				HNS::extractFromOpenVDB<openvdb::FloatGrid, float>(grid, open_out_data);
 			}
 
-			NanoFloatGrid out_data;
+			HNS::NanoFloatGrid out_data;
 			{
 				const auto name = "Computing " + grid->getName() + " advection";
 				boss.start(name.c_str());

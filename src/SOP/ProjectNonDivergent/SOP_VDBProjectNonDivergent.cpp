@@ -3,15 +3,15 @@
 //
 
 #include "SOP_VDBProjectNonDivergent.hpp"
-#include "MultigridSolver.hpp"
 
 #include <UT/UT_DSOVersion.h>
 #include <nanovdb/NanoVDB.h>
 
-
-#include <Utils/Utils.hpp>
-#include <Utils/ScopedTimer.hpp>
 #include <Utils/OpenToNano.hpp>
+#include <Utils/ScopedTimer.hpp>
+#include <Utils/Utils.hpp>
+
+#include "MultigridSolver.hpp"
 
 const char* const SOP_HNanoVDBProjectNonDivergentVerb::theDsFile = R"THEDSFILE(
 {
@@ -73,10 +73,10 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 		cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
 	}
 
-	OpenVectorGrid open_out_data;
+	HNS::OpenVectorGrid open_out_data;
 	{
 		ScopedTimer timer("Extracting voxels from " + in_velocity->getName());
-		extractFromOpenVDB<openvdb::VectorGrid, openvdb::Coord, openvdb::Vec3f>(in_velocity, open_out_data);
+		HNS::extractFromOpenVDB<openvdb::VectorGrid, openvdb::Vec3f>(in_velocity, open_out_data);
 	}
 
 	cudaStream_t stream;
@@ -87,13 +87,14 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 		pointToGridVectorToDevice(open_out_data, in_velocity->voxelSize()[0], sopcache->pHandle, stream);
 	}
 
-	NanoFloatGrid out_data;
+	HNS::NanoFloatGrid out_data;
 	{
 		ScopedTimer timer("Computing Divergence");
 
 		out_data.size = open_out_data.size;
 		out_data.pCoords = new nanovdb::Coord[out_data.size];
-		memcpy_s(out_data.pCoords, out_data.size * sizeof(nanovdb::Coord), (nanovdb::Coord*)open_out_data.pCoords, open_out_data.size * sizeof(openvdb::Coord));
+		memcpy_s(out_data.pCoords, out_data.size * sizeof(nanovdb::Coord), (nanovdb::Coord*)open_out_data.pCoords,
+		         open_out_data.size * sizeof(openvdb::Coord));
 
 		out_data.pValues = new float[out_data.size];
 
@@ -115,7 +116,7 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 		for (size_t i = 0; i < out_data.size; ++i) {
 			auto& coord = out_data.pCoords[i];
 			auto value = out_data.pValues[i];
-			accessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
+			accessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
 		}
 
 		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, "divergence");

@@ -3,45 +3,37 @@
 #include <nanovdb/util/SampleFromVoxels.h>
 
 #include <cuda/std/cmath>
-#include <nanovdb/util/cuda/CudaPointsToGrid.cuh>
 
 #include "../Utils/GridData.hpp"
+#include "HNanoGrid/HNanoGrid.cuh"
 #include "Utils.cuh"
 
 
-extern "C" void advect_points_to_grid_f(const OpenFloatGrid& in_data, const nanovdb::Vec3fGrid* vel_grid,
-                                        NanoFloatGrid& out_data, const float voxelSize, const float dt,
+extern "C" void advect_points_to_grid_f(const HNS::OpenFloatGrid& in_data, const nanovdb::Vec3fGrid* vel_grid,
+                                        HNS::NanoFloatGrid& out_data, const float voxelSize, const float dt,
                                         const cudaStream_t& stream) {
 	const size_t npoints = in_data.size;
 
-	// Allocate and copy coordinates to the device
-	nanovdb::Coord* d_coords = nullptr;
-	float *d_values, *temp_values = nullptr;
-	cudaMalloc(&d_coords, npoints * sizeof(nanovdb::Coord));
-	cudaMalloc(&d_values, npoints * sizeof(float));
-	cudaMalloc(&temp_values, npoints * sizeof(float));
-
-
-	cudaMemcpy(d_coords, (nanovdb::Coord*)in_data.pCoords, npoints * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_values, in_data.pValues, npoints * sizeof(float), cudaMemcpyHostToDevice);
-
-	cudaDeviceSynchronize();
+	CudaResources<float> resources(npoints, stream);
+	HostMemoryManager<float, float> memory_manager(in_data, out_data);
+	LoadPointData<float, float>(resources, in_data, npoints, stream);
 
 	// Generate a NanoVDB grid that contains the list of voxels on the device
-	auto handle = nanovdb::cudaVoxelsToGrid<float>(d_coords, npoints, voxelSize);
+	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> handle =
+	    nanovdb::cudaVoxelsToGrid<float>(resources.d_coords, npoints, voxelSize);
 	nanovdb::FloatGrid* d_grid = handle.deviceGrid<float>();
 
-	constexpr unsigned int numThreads = 128;
+	constexpr unsigned int numThreads = 256;
 	const unsigned int numBlocks = blocksPerGrid(npoints, numThreads);
 
 	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(npoints, [=] __device__(const size_t tid) {
 		const auto accessor = d_grid->tree().getAccessor();
-		accessor.set<nanovdb::SetVoxel<float>>(d_coords[tid], d_values[tid]);
+		accessor.set<nanovdb::SetVoxel<float>>(resources.d_coords[tid], resources.d_values[tid]);
 	});
 
 	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(npoints, [=] __device__(const size_t tid) {
-		const nanovdb::Coord& ijk = d_coords[tid];
-		const float& density = d_values[tid];
+		const nanovdb::Coord& ijk = resources.d_coords[tid];
+		const float& density = resources.d_values[tid];
 
 		const auto accessor = d_grid->tree().getAccessor();
 
@@ -79,60 +71,41 @@ extern "C" void advect_points_to_grid_f(const OpenFloatGrid& in_data, const nano
 			// Ensure non-negativity
 			new_density = fmaxf(0.0f, new_density);
 
-			temp_values[tid] = new_density;
+			resources.d_temp_values[tid] = new_density;
 		}
 	});
 
-	out_data.size = npoints;
-	out_data.pCoords = new nanovdb::Coord[out_data.size];
-	out_data.pValues = new float[out_data.size];
+	UnloadPointData<float>(resources, out_data, npoints, stream);
 
-	// Copy results back to the host
-	cudaMemcpyAsync(out_data.pValues, temp_values, sizeof(float) * npoints, cudaMemcpyDeviceToHost, stream);
-	cudaMemcpyAsync(out_data.pCoords, d_coords, sizeof(nanovdb::Coord) * npoints, cudaMemcpyDeviceToHost, stream);
-
-	cudaFreeAsync(d_coords, stream);
-	cudaFreeAsync(d_values, stream);
-	cudaFreeAsync(temp_values, stream);
+	resources.clear(stream);
 }
 
 
-extern "C" void advect_points_to_grid_v(const OpenVectorGrid& in_data, NanoVectorGrid& out_data, const float voxelSize,
-                                        const float dt, const cudaStream_t& stream) {
+extern "C" void advect_points_to_grid_v(const HNS::OpenVectorGrid& in_data, HNS::NanoVectorGrid& out_data,
+                                        const float voxelSize, const float dt, const cudaStream_t& stream) {
 	const size_t npoints = in_data.size;
 
-	// Allocate and copy coordinates to the device
-	nanovdb::Coord* d_coords = nullptr;
-	nanovdb::Vec3f* d_values = nullptr;
-	nanovdb::Vec3f* temp_values = nullptr;
-
-	cudaMalloc(&d_coords, npoints * sizeof(nanovdb::Coord));
-	cudaMalloc(&d_values, npoints * sizeof(nanovdb::Vec3f));
-	cudaMalloc(&temp_values, npoints * sizeof(nanovdb::Vec3f));
-
-	cudaMemcpy(d_coords, (nanovdb::Coord*)in_data.pCoords, npoints * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice);
-
-	cudaMemcpy(d_values, (nanovdb::Vec3f*)in_data.pValues, npoints * sizeof(nanovdb::Vec3f), cudaMemcpyHostToDevice);
-
-	cudaDeviceSynchronize();
+	CudaResources<nanovdb::Vec3f> resources(npoints, stream);
+	HostMemoryManager<openvdb::Vec3f, nanovdb::Vec3f> memory_manager(in_data, out_data);
+	LoadPointData<openvdb::Vec3f, nanovdb::Vec3f>(resources, in_data, npoints, stream);
 
 	// Generate a NanoVDB grid that contains the list of voxels on the device
 	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> handle =
-	    nanovdb::cudaVoxelsToGrid<nanovdb::Vec3f>(d_coords, npoints, voxelSize);
+	    nanovdb::cudaVoxelsToGrid<nanovdb::Vec3f>(resources.d_coords, npoints, voxelSize);
 	nanovdb::Vec3fGrid* d_grid = handle.deviceGrid<nanovdb::Vec3f>();
-
 
 	constexpr unsigned int numThreads = 256;
 	const unsigned int numBlocks = blocksPerGrid(npoints, numThreads);
 
 	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(npoints, [=] __device__(const size_t tid) {
 		const auto accessor = d_grid->tree().getAccessor();
-		accessor.set<nanovdb::SetVoxel<nanovdb::Vec3f>>(d_coords[tid], d_values[tid]);
+		accessor.set<nanovdb::SetVoxel<nanovdb::Vec3f>>(resources.d_coords[tid], resources.d_values[tid]);
 	});
+	cudaCheckError();
 
 	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(npoints, [=] __device__(const size_t tid) {
-		const nanovdb::Coord& ijk = d_coords[tid];
-		const nanovdb::Vec3f& velocity = d_values[tid];
+		const nanovdb::Coord& ijk = resources.d_coords[tid];
+		const nanovdb::Vec3f& velocity = resources.d_values[tid];
 		const auto velAccessor = d_grid->tree().getAccessor();
 
 		const auto velSampler = nanovdb::createSampler<1>(velAccessor);
@@ -172,18 +145,11 @@ extern "C" void advect_points_to_grid_v(const OpenVectorGrid& in_data, NanoVecto
 		new_velocity[2] = lerp(v_forward[2], v_corrected[2], blend_factor);
 
 		// Store the new velocity
-		temp_values[tid] = new_velocity;
+		resources.d_temp_values[tid] = new_velocity;
 	});
+	cudaCheckError();
 
-	out_data.size = npoints;
-	out_data.pCoords = new nanovdb::Coord[out_data.size];
-	out_data.pValues = new nanovdb::Vec3f[out_data.size];
+	UnloadPointData<nanovdb::Vec3f>(resources, out_data, npoints, stream);
 
-	// Copy results back to the host
-	cudaMemcpyAsync(out_data.pValues, temp_values, sizeof(nanovdb::Vec3f) * npoints, cudaMemcpyDeviceToHost, stream);
-	cudaMemcpyAsync(out_data.pCoords, d_coords, sizeof(nanovdb::Coord) * npoints, cudaMemcpyDeviceToHost, stream);
-
-	cudaFreeAsync(d_coords, stream);
-	cudaFreeAsync(d_values, stream);
-	cudaFreeAsync(temp_values, stream);
+	resources.clear(stream);
 }

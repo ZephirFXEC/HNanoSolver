@@ -76,8 +76,10 @@ class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
-extern "C" void pointToGridVectorToDevice(const OpenVectorGrid& in_data, float voxelSize,
-                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream);
+extern "C" void pointToGridVectorToDevice(const HNS::OpenVectorGrid& in_data, float voxelSize,
+                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle,
+                                          const cudaStream_t& stream);
 
-extern "C" void advect_points_to_grid_f(const OpenFloatGrid& in_data, const nanovdb::Vec3fGrid* vel_grid,
-                                        NanoFloatGrid& out_data, float voxelSize, float dt, const cudaStream_t& stream);
+extern "C" void advect_points_to_grid_f(const HNS::OpenFloatGrid& in_data, const nanovdb::Vec3fGrid* vel_grid,
+                                        HNS::NanoFloatGrid& out_data, float voxelSize, float dt,
+                                        const cudaStream_t& stream);

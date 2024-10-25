@@ -7,6 +7,7 @@ add_library(Kernels STATIC
         PointToGrid.cu
         utils.cuh
         PressureProjection.cu
+        HNanoGrid/HNanoGrid.cuh
 )
 
 target_compile_features(Kernels PUBLIC cxx_std_17)

@@ -2,9 +2,23 @@
 // Created by zphrfx on 29/08/2024.
 //
 
+/* TODO: extract data from openvdb containing :
+- Values
+- Coords
+- Value[Coord] mapping
+
+then no conversion to nanovdb is needed.
+custom sampler as to be written.
+Run the kernels on the GPU
+
+export back value / coord to the CPU to build the grid.
+*/
+
+
 #include "SOP_VDBFromGrid.hpp"
 
 #include <UT/UT_DSOVersion.h>
+#include <UT/UT_Tracing.h>
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
 
@@ -12,7 +26,8 @@
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
 
-extern "C" void pointToGridFloat(const OpenFloatGrid& in_data, float voxelSize, NanoFloatGrid& out_data, const cudaStream_t& stream);
+extern "C" void pointToGridFloat(const HNS::OpenFloatGrid& in_data, float voxelSize, HNS::NanoFloatGrid& out_data,
+                                 const cudaStream_t& stream);
 
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
@@ -70,19 +85,15 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
 
-	OpenFloatGrid open_out_data;
+	HNS::OpenFloatGrid open_out_data;
 	{
 		ScopedTimer timer("Extracting voxels from " + AGrid[0]->getName());
-		extractFromOpenVDB<openvdb::FloatGrid, openvdb::Coord, float>(AGrid[0], open_out_data);
+		HNS::extractFromOpenVDB<openvdb::FloatGrid, float>(AGrid[0], open_out_data);
 	}
 
-	NanoFloatGrid out_data;
+	HNS::NanoFloatGrid out_data;
 	{
 		ScopedTimer timer("Creating " + AGrid[0]->getName() + " NanoVDB grid");
-
-		out_data.size = open_out_data.size;
-		out_data.pCoords = new nanovdb::Coord[out_data.size];
-		out_data.pValues = new float[out_data.size];
 
 		pointToGridFloat(open_out_data, sopparms.getVoxelsize(), out_data, stream);
 	}
@@ -90,7 +101,7 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	detail->clearAndDestroy();
 
 	{
-		ScopedTimer timer("Building " + AGrid[0]->getName()  + " grid");
+		ScopedTimer timer("Building " + AGrid[0]->getName() + " grid");
 
 		openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create();
 		out->setGridClass(openvdb::GRID_FOG_VOLUME);
@@ -98,32 +109,27 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		out->setName(AGrid[0]->getName());
 
 		openvdb::tree::ValueAccessor<openvdb::FloatTree> valueAccessor(out->tree());
-
 		/*
 		 * Adding/Removing Nodes under Same Parent is Not Thread-Safe
 		 * Adding/Removing Nodes under Different Parents is Thread-Safe
 		 * TODO: find a way to multithread this by adding nodes under different parents
 		 *
 		UTparallelFor(UT_BlockedRange<int64>(0, out_data.size), [&](const UT_BlockedRange<int64> &range) {
-			for (int64 i = range.begin(); i != range.end(); ++i) {
-				const auto& coord = out_data.pCoords[i];
-				const float value = out_data.pValues[i];
-				valueAccessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
-			}
+		    for (int64 i = range.begin(); i != range.end(); ++i) {
+		        const auto& coord = out_data.pCoords[i];
+		        const float value = out_data.pValues[i];
+		        valueAccessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
+		    }
 		});
 		*
 		*
 		*/
-
 		for (size_t i = 0; i < out_data.size; ++i) {
 			const auto& coord = out_data.pCoords[i];
 			const float value = out_data.pValues[i];
 			valueAccessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
 		}
 
-		GU_PrimVDB::buildFromGrid(*detail, out, nullptr,	out->getName().c_str());
+		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
 	}
-
-
 }
-

@@ -9,7 +9,7 @@ add_compile_definitions(
         TRACY_ENABLE
 )
 
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /Ob3 /GL /Qpar /favor:INTEL64  /arch:AVX2")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /Ob3 /GL /Qpar /favor:INTEL64 /arch:AVX2")
 set(CMAKE_LINK_FLAGS_RELEASE "${CMAKE_LINK_FLAGS_RELEASE} /LTCG")
 
 # ------- Find CUDA -----------
@@ -40,11 +40,12 @@ houdini_generate_proto_headers( FILES
 
 ########################  Utils library ########################################################################
 add_library(Utils STATIC
-        src/Utils/Utils.cpp
-        src/Utils/Utils.hpp
         src/Utils/ScopedTimer.hpp
         src/Utils/OpenToNano.hpp
         src/Utils/GridData.hpp
+        src/Utils/Memory.hpp
+        src/Utils/Utils.cpp
+        src/Utils/Utils.hpp
 )
 target_link_libraries(Utils PRIVATE
         Houdini
