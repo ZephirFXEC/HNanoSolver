@@ -83,7 +83,9 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	}
 
 	cudaStream_t stream;
-	cudaStreamCreate(&stream);
+	int priority;
+	cudaDeviceGetStreamPriorityRange(nullptr, &priority);
+	cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, priority);
 
 	HNS::OpenFloatGrid open_out_data;
 	{
@@ -96,6 +98,9 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		ScopedTimer timer("Creating " + AGrid[0]->getName() + " NanoVDB grid");
 
 		pointToGridFloat(open_out_data, sopparms.getVoxelsize(), out_data, stream);
+
+		cudaStreamSynchronize(stream);
+		open_out_data.clear();
 	}
 
 	detail->clearAndDestroy();
@@ -109,27 +114,15 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		out->setName(AGrid[0]->getName());
 
 		openvdb::tree::ValueAccessor<openvdb::FloatTree> valueAccessor(out->tree());
-		/*
-		 * Adding/Removing Nodes under Same Parent is Not Thread-Safe
-		 * Adding/Removing Nodes under Different Parents is Thread-Safe
-		 * TODO: find a way to multithread this by adding nodes under different parents
-		 *
-		UTparallelFor(UT_BlockedRange<int64>(0, out_data.size), [&](const UT_BlockedRange<int64> &range) {
-		    for (int64 i = range.begin(); i != range.end(); ++i) {
-		        const auto& coord = out_data.pCoords[i];
-		        const float value = out_data.pValues[i];
-		        valueAccessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
-		    }
-		});
-		*
-		*
-		*/
+
 		for (size_t i = 0; i < out_data.size; ++i) {
-			const auto& coord = out_data.pCoords[i];
-			const float value = out_data.pValues[i];
+			const auto& coord = out_data.pCoords()[i];
+			const auto& value = out_data.pValues()[i];
 			valueAccessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
 		}
 
 		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
 	}
+
+	out_data.clear();
 }

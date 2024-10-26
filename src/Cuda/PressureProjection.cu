@@ -13,7 +13,7 @@ extern "C" void ComputeDivergence(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>
 	float* d_value = nullptr;
 	cudaMalloc(&d_coord, out_div.size * sizeof(nanovdb::Coord));
 	cudaMalloc(&d_value, out_div.size * sizeof(float));
-	cudaMemcpy(d_coord, out_div.pCoords, out_div.size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_coord, out_div.pCoords(), out_div.size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice);
 
 	constexpr unsigned int numThreads = 256;
 	const unsigned int numBlocks = (out_div.size + numThreads - 1) / numThreads;
@@ -40,7 +40,7 @@ extern "C" void ComputeDivergence(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>
 	});
 	cudaCheckError();
 
-	cudaMemcpy(out_div.pValues, d_value, out_div.size * sizeof(float), cudaMemcpyDeviceToHost);
+	cudaMemcpy(out_div.pValues(), d_value, out_div.size * sizeof(float), cudaMemcpyDeviceToHost);
 
 	cudaFree(d_coord);
 	cudaFree(d_value);

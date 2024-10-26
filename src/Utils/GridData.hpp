@@ -9,36 +9,145 @@ namespace HNS {
 static constexpr size_t ALIGNMENT = 32;
 template <typename CoordT, typename ValueT>
 struct GridData {
+	enum class AllocationType {
+		None,
+		CudaPinned,
+		AlignedMalloc,
+		StandardMalloc,
+	};
+
+	struct MemoryBlock {
+		void* ptr = nullptr;
+		AllocationType allocType = AllocationType::None;
+		size_t size = 0;
+		size_t alignment = 0;
+
+		void free() {
+			if (!ptr) return;
+			switch (allocType) {
+				case AllocationType::CudaPinned:
+					cudaFreeHost(ptr);
+					break;
+				case AllocationType::AlignedMalloc:
+					_aligned_free(ptr);
+					break;
+				case AllocationType::StandardMalloc:
+					std::free(ptr);
+					break;
+				case AllocationType::None:
+					break;
+			}
+			ptr = nullptr;
+			size = 0;
+			allocType = AllocationType::None;
+		}
+	};
+
+	// Destructor
+	~GridData() { clear(); }
+
+	// Move operations
+	GridData(GridData&& other) noexcept
+	    : coordsBlock(other.coordsBlock), valuesBlock(other.valuesBlock), size(other.size) {
+		other.coordsBlock = MemoryBlock();
+		other.valuesBlock = MemoryBlock();
+		other.size = 0;
+	}
+
+	GridData& operator=(GridData&& other) noexcept {
+		if (this != &other) {
+			clear();
+			coordsBlock = other.coordsBlock;
+			valuesBlock = other.valuesBlock;
+			size = other.size;
+			other.coordsBlock = MemoryBlock();
+			other.valuesBlock = MemoryBlock();
+			other.size = 0;
+		}
+		return *this;
+	}
+
+	// Delete copy operations
+	GridData(const GridData&) = delete;
+	GridData& operator=(const GridData&) = delete;
+
+	// Default constructor
 	GridData() = default;
-	GridData(const CoordT* pCoords, const ValueT* pValues, const size_t size)
-	    : pCoords(pCoords), pValues(pValues), size(size) {}
-	GridData(const GridData& other) : pCoords(other.pCoords), pValues(other.pValues), size(other.size) {}
 
-	void* operator new(const size_t size) {
-		void* ptr = nullptr;
-		ptr = _aligned_malloc(size, ALIGNMENT);
-		if (!ptr) throw std::bad_alloc();
-		return ptr;
+	void allocateCudaPinned(const size_t numElements) {
+		clear();  // Free existing memory first
+
+		cudaError_t err = cudaMallocHost(&coordsBlock.ptr, numElements * sizeof(CoordT));
+		if (err != cudaSuccess) throw std::runtime_error("Failed to allocate pinned memory for coords");
+		coordsBlock.allocType = AllocationType::CudaPinned;
+		coordsBlock.size = numElements * sizeof(CoordT);
+
+		err = cudaMallocHost(&valuesBlock.ptr, numElements * sizeof(ValueT));
+		if (err != cudaSuccess) {
+			coordsBlock.free();
+			throw std::runtime_error("Failed to allocate pinned memory for values");
+		}
+		valuesBlock.allocType = AllocationType::CudaPinned;
+		valuesBlock.size = numElements * sizeof(ValueT);
+
+		size = numElements;
 	}
-	void* operator new[](const size_t size) {
-		void* ptr = nullptr;
-		ptr = _aligned_malloc(size, ALIGNMENT);
-		if (!ptr) throw std::bad_alloc();
-		return ptr;
+
+	void allocateAligned(const size_t numElements, size_t alignment) {
+		clear();
+		coordsBlock.ptr = _aligned_malloc(numElements * sizeof(CoordT), alignment);
+
+		if (!coordsBlock.ptr) throw std::runtime_error("Failed to allocate aligned memory for coords");
+		coordsBlock.allocType = AllocationType::AlignedMalloc;
+		coordsBlock.size = numElements * sizeof(CoordT);
+		coordsBlock.alignment = alignment;
+		valuesBlock.ptr = _aligned_malloc(numElements * sizeof(ValueT), alignment);
+		if (!valuesBlock.ptr) {
+			coordsBlock.free();
+			throw std::runtime_error("Failed to allocate aligned memory for values");
+		}
+		valuesBlock.allocType = AllocationType::AlignedMalloc;
+		valuesBlock.size = numElements * sizeof(ValueT);
+		valuesBlock.alignment = alignment;
+
+		size = numElements;
 	}
 
-	void operator delete(void* ptr) { _aligned_free(ptr); }
-	void operator delete[](void* ptr) { _aligned_free(ptr); }
+	void allocateStandard(const size_t numElements) {
+		clear();
 
-	~GridData() {
-		delete[] pCoords;
-		delete[] pValues;
+		coordsBlock.ptr = malloc(numElements * sizeof(CoordT));
+		if (!coordsBlock.ptr) throw std::runtime_error("Failed to allocate memory for coords");
+		coordsBlock.allocType = AllocationType::StandardMalloc;
+		coordsBlock.size = numElements * sizeof(CoordT);
+
+		valuesBlock.ptr = malloc(numElements * sizeof(ValueT));
+		if (!valuesBlock.ptr) {
+			coordsBlock.free();
+			throw std::runtime_error("Failed to allocate memory for values");
+		}
+		valuesBlock.allocType = AllocationType::StandardMalloc;
+		valuesBlock.size = numElements * sizeof(ValueT);
+
+		size = numElements;
+	}
+
+	CoordT* pCoords() { return static_cast<CoordT*>(coordsBlock.ptr); }
+	const CoordT* pCoords() const { return static_cast<const CoordT*>(coordsBlock.ptr); }
+
+	ValueT* pValues() { return static_cast<ValueT*>(valuesBlock.ptr); }
+	const ValueT* pValues() const { return static_cast<const ValueT*>(valuesBlock.ptr); }
+
+	// Clear all memory
+	void clear() {
+		coordsBlock.free();
+		valuesBlock.free();
 		size = 0;
 	}
 
-	CoordT* pCoords = nullptr;
-	ValueT* pValues = nullptr;
-	size_t size = 0;
+	MemoryBlock coordsBlock{};
+	MemoryBlock valuesBlock{};
+	size_t size{0};
 };
 
 // Base templates for OpenVDB and NanoVDB grids

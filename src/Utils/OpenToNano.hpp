@@ -163,17 +163,9 @@ void extractFromOpenVDB_v2(const typename GridT::ConstPtr& grid, GridData<CoordT
 template <typename GridT, typename ValueT>
 void extractFromOpenVDB(const typename GridT::ConstPtr& grid, OpenGrid<ValueT>& out_data) {
 	const auto& tree = grid->tree();
+
 	out_data.size = tree.activeVoxelCount();
-
-	// Aligned allocation for better memory access patterns
-	out_data.pCoords = new openvdb::Coord[out_data.size];
-	out_data.pValues = new ValueT[out_data.size];
-
-	if (!out_data.pCoords || !out_data.pValues) {
-		if (out_data.pCoords) _aligned_free(out_data.pCoords);
-		if (out_data.pValues) _aligned_free(out_data.pValues);
-		throw std::bad_alloc();
-	}
+	out_data.allocateAligned(out_data.size, 64);
 
 	std::atomic<size_t> writePos{0};
 	// Increased chunk size for better cache utilization
@@ -216,22 +208,8 @@ void extractFromOpenVDB(const typename GridT::ConstPtr& grid, OpenGrid<ValueT>& 
 
 			if (count > 0) {
 				const size_t pos = writePos.fetch_add(count);
-				// Use MSVC intrinsics for memory copy if available
-				if constexpr (sizeof(openvdb::Coord) % 16 == 0) {
-					__movsq(reinterpret_cast<unsigned __int64*>(out_data.pCoords + pos),
-					        reinterpret_cast<const unsigned __int64*>(localCoords.data()),
-					        (count * sizeof(openvdb::Coord)) / 8);
-				} else {
-					memcpy(out_data.pCoords + pos, localCoords.data(), count * sizeof(openvdb::Coord));
-				}
-
-				if constexpr (sizeof(ValueT) % 16 == 0) {
-					__movsq(reinterpret_cast<unsigned __int64*>(out_data.pValues + pos),
-					        reinterpret_cast<const unsigned __int64*>(localValues.data()),
-					        (count * sizeof(ValueT)) / 8);
-				} else {
-					memcpy(out_data.pValues + pos, localValues.data(), count * sizeof(ValueT));
-				}
+				memcpy(out_data.pCoords() + pos, localCoords.data(), count * sizeof(openvdb::Coord));
+				memcpy(out_data.pValues() + pos, localValues.data(), count * sizeof(ValueT));
 			}
 		}
 	});
