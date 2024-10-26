@@ -83,9 +83,7 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	}
 
 	cudaStream_t stream;
-	int priority;
-	cudaDeviceGetStreamPriorityRange(nullptr, &priority);
-	cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, priority);
+	cudaStreamCreate(&stream);
 
 	HNS::OpenFloatGrid open_out_data;
 	{
@@ -98,9 +96,6 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		ScopedTimer timer("Creating " + AGrid[0]->getName() + " NanoVDB grid");
 
 		pointToGridFloat(open_out_data, sopparms.getVoxelsize(), out_data, stream);
-
-		cudaStreamSynchronize(stream);
-		open_out_data.clear();
 	}
 
 	detail->clearAndDestroy();
@@ -124,5 +119,5 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
 	}
 
-	out_data.clear();
+	cudaStreamDestroy(stream);
 }

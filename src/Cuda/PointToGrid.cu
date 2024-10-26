@@ -37,7 +37,7 @@ void pointToGridTemplate(const HNS::OpenGrid<ValueInT>& in_data, const float vox
 	ValueOutT* d_values = nullptr;
 	ValueOutT* d_temp_values = nullptr;
 
-
+	cudaMalloc(&d_temp_values, npoints * sizeof(ValueOutT));
 	cudaMalloc(&d_coords, npoints * sizeof(nanovdb::Coord));
 	cudaMemcpy(d_coords, reinterpret_cast<const nanovdb::Coord*>(in_data.pCoords()), npoints * sizeof(nanovdb::Coord),
 			   cudaMemcpyHostToDevice);
@@ -59,15 +59,13 @@ void pointToGridTemplate(const HNS::OpenGrid<ValueInT>& in_data, const float vox
 		accessor.template set<nanovdb::SetVoxel<ValueOutT>>(d_coords[tid], d_values[tid]);
 	});
 
-	cudaMallocAsync(&d_temp_values, npoints * sizeof(ValueOutT), stream);
-
-	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(
-	    npoints, [=] __device__(const size_t tid) { d_temp_values[tid] = d_values[tid]; });
+	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(npoints, [=] __device__(const size_t tid) {
+		d_temp_values[tid] = d_values[tid];
+	});
 
 	//UnloadPointData<ValueOutT>(resources, out_data, npoints, stream);
 	// Prepare output and initiate async transfers back to host
 
-	out_data.size = npoints;
 	out_data.allocateStandard(npoints);
 
 	// Copy results back to the host

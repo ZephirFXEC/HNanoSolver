@@ -16,10 +16,10 @@ struct GridData {
 		StandardMalloc,
 	};
 
+	template <typename MemoryT>
 	struct MemoryBlock {
-		void* ptr = nullptr;
+		MemoryT* ptr = nullptr;
 		AllocationType allocType = AllocationType::None;
-		size_t size = 0;
 		size_t alignment = 0;
 
 		void free() {
@@ -38,7 +38,6 @@ struct GridData {
 					break;
 			}
 			ptr = nullptr;
-			size = 0;
 			allocType = AllocationType::None;
 		}
 	};
@@ -78,65 +77,63 @@ struct GridData {
 		clear();  // Free existing memory first
 
 		cudaError_t err = cudaMallocHost(&coordsBlock.ptr, numElements * sizeof(CoordT));
-		if (err != cudaSuccess) throw std::runtime_error("Failed to allocate pinned memory for coords");
-		coordsBlock.allocType = AllocationType::CudaPinned;
-		coordsBlock.size = numElements * sizeof(CoordT);
+		if (err != cudaSuccess) {
+			throw std::runtime_error("Failed to allocate pinned memory for coords");
+		}
 
 		err = cudaMallocHost(&valuesBlock.ptr, numElements * sizeof(ValueT));
 		if (err != cudaSuccess) {
 			coordsBlock.free();
 			throw std::runtime_error("Failed to allocate pinned memory for values");
 		}
+
 		valuesBlock.allocType = AllocationType::CudaPinned;
-		valuesBlock.size = numElements * sizeof(ValueT);
+		coordsBlock.allocType = AllocationType::CudaPinned;
 
 		size = numElements;
 	}
 
 	void allocateAligned(const size_t numElements, size_t alignment) {
 		clear();
-		coordsBlock.ptr = _aligned_malloc(numElements * sizeof(CoordT), alignment);
-
+		coordsBlock.ptr = static_cast<CoordT*>(_aligned_malloc(numElements * sizeof(CoordT), alignment));
 		if (!coordsBlock.ptr) throw std::runtime_error("Failed to allocate aligned memory for coords");
-		coordsBlock.allocType = AllocationType::AlignedMalloc;
-		coordsBlock.size = numElements * sizeof(CoordT);
-		coordsBlock.alignment = alignment;
-		valuesBlock.ptr = _aligned_malloc(numElements * sizeof(ValueT), alignment);
+
+		valuesBlock.ptr = static_cast<ValueT*>(_aligned_malloc(numElements * sizeof(ValueT), alignment));
 		if (!valuesBlock.ptr) {
 			coordsBlock.free();
 			throw std::runtime_error("Failed to allocate aligned memory for values");
 		}
-		valuesBlock.allocType = AllocationType::AlignedMalloc;
-		valuesBlock.size = numElements * sizeof(ValueT);
-		valuesBlock.alignment = alignment;
 
+		valuesBlock.allocType = AllocationType::AlignedMalloc;
+		valuesBlock.alignment = alignment;
+		coordsBlock.allocType = AllocationType::AlignedMalloc;
+		coordsBlock.alignment = alignment;
 		size = numElements;
 	}
 
 	void allocateStandard(const size_t numElements) {
 		clear();
 
-		coordsBlock.ptr = malloc(numElements * sizeof(CoordT));
+		coordsBlock.ptr = static_cast<CoordT*>(malloc(numElements * sizeof(CoordT)));
 		if (!coordsBlock.ptr) throw std::runtime_error("Failed to allocate memory for coords");
-		coordsBlock.allocType = AllocationType::StandardMalloc;
-		coordsBlock.size = numElements * sizeof(CoordT);
 
-		valuesBlock.ptr = malloc(numElements * sizeof(ValueT));
+		valuesBlock.ptr = static_cast<ValueT*>(malloc(numElements * sizeof(ValueT)));
 		if (!valuesBlock.ptr) {
 			coordsBlock.free();
 			throw std::runtime_error("Failed to allocate memory for values");
 		}
+
 		valuesBlock.allocType = AllocationType::StandardMalloc;
-		valuesBlock.size = numElements * sizeof(ValueT);
+		coordsBlock.allocType = AllocationType::StandardMalloc;
 
 		size = numElements;
 	}
 
-	CoordT* pCoords() { return static_cast<CoordT*>(coordsBlock.ptr); }
-	const CoordT* pCoords() const { return static_cast<const CoordT*>(coordsBlock.ptr); }
+	CoordT* pCoords() { return coordsBlock.ptr; }
+	const CoordT* pCoords() const { return coordsBlock.ptr; }
 
-	ValueT* pValues() { return static_cast<ValueT*>(valuesBlock.ptr); }
-	const ValueT* pValues() const { return static_cast<const ValueT*>(valuesBlock.ptr); }
+	ValueT* pValues() { return valuesBlock.ptr; }
+	const ValueT* pValues() const { return valuesBlock.ptr; }
 
 	// Clear all memory
 	void clear() {
@@ -145,32 +142,26 @@ struct GridData {
 		size = 0;
 	}
 
-	MemoryBlock coordsBlock{};
-	MemoryBlock valuesBlock{};
+	MemoryBlock<CoordT> coordsBlock{};
+	MemoryBlock<ValueT> valuesBlock{};
 	size_t size{0};
 };
 
-// Base templates for OpenVDB and NanoVDB grids
 template <typename CoordType, typename ValueType>
 using GenericGrid = GridData<CoordType, ValueType>;
 
 template <typename T>
 using OpenGrid = GenericGrid<openvdb::Coord, T>;
-
 template <typename T>
 using NanoGrid = GenericGrid<nanovdb::Coord, T>;
 
-// Specific grid types with float and vector values
 template <typename CoordType>
 using FloatGrid = GenericGrid<CoordType, float>;
-
 template <typename CoordType>
 using VectorGrid = GenericGrid<CoordType, nanovdb::Vec3f>;
 
-// Typedefs for common OpenVDB and NanoVDB grids
 using OpenFloatGrid = OpenGrid<float>;
 using OpenVectorGrid = OpenGrid<openvdb::Vec3f>;
-
 using NanoFloatGrid = NanoGrid<float>;
 using NanoVectorGrid = NanoGrid<nanovdb::Vec3f>;
 
