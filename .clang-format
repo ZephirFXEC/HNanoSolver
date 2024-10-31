@@ -6,5 +6,5 @@ IndentWidth: 4
 TabWidth: 4
 
 # length of line
-ColumnLimit: 120
+ColumnLimit: 140
 MaxEmptyLinesToKeep: 2

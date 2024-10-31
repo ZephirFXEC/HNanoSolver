@@ -1,24 +1,26 @@
 #include <nanovdb/util/GridHandle.h>
-
 #include "../Utils/GridData.hpp"
 #include "Utils.cuh"
 
 
 extern "C" void ComputeDivergence(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& vel_handle,
-                                  HNS::NanoFloatGrid& out_div, const cudaStream_t& stream) {
+                                  HNS::OpenVectorGrid& in_data, HNS::NanoFloatGrid& out_div, const cudaStream_t& stream) {
+
+	const size_t npoints = in_data.size;
 	const nanovdb::Vec3fGrid* vel = vel_handle.deviceGrid<nanovdb::Vec3f>();
 
+	cudaCheck(cudaHostRegister(in_data.pCoords(), npoints * sizeof(openvdb::Coord), cudaHostRegisterDefault));
 
 	nanovdb::Coord* d_coord = nullptr;
 	float* d_value = nullptr;
-	cudaMalloc(&d_coord, out_div.size * sizeof(nanovdb::Coord));
-	cudaMalloc(&d_value, out_div.size * sizeof(float));
-	cudaMemcpy(d_coord, out_div.pCoords(), out_div.size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice);
+	cudaCheck(cudaMallocAsync(&d_coord, npoints * sizeof(nanovdb::Coord), stream));
+	cudaCheck(cudaMallocAsync(&d_value, npoints * sizeof(float), stream));
+	cudaCheck(cudaMemcpyAsync(d_coord, in_data.pCoords(), npoints * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
 
 	constexpr unsigned int numThreads = 256;
-	const unsigned int numBlocks = (out_div.size + numThreads - 1) / numThreads;
+	const unsigned int numBlocks = (npoints + numThreads - 1) / numThreads;
 
-	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(out_div.size, [=] __device__(const size_t tid) {
+	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(npoints, [=] __device__(const size_t tid) {
 		const auto velAccessor = vel->getAccessor();
 
 		const nanovdb::Coord& coord = d_coord[tid];
@@ -40,8 +42,18 @@ extern "C" void ComputeDivergence(nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>
 	});
 	cudaCheckError();
 
-	cudaMemcpy(out_div.pValues(), d_value, out_div.size * sizeof(float), cudaMemcpyDeviceToHost);
+	out_div.allocateStandard(npoints);
 
-	cudaFree(d_coord);
-	cudaFree(d_value);
+	cudaCheck(cudaHostRegister(out_div.pValues(), npoints * sizeof(float), cudaHostRegisterDefault));
+	cudaCheck(cudaHostRegister(out_div.pCoords(), npoints * sizeof(openvdb::Coord), cudaHostRegisterDefault));
+
+	cudaCheck(cudaMemcpyAsync(out_div.pValues(), d_value, out_div.size * sizeof(float), cudaMemcpyDeviceToHost, stream));
+	cudaCheck(cudaMemcpyAsync(out_div.pCoords(), in_data.pCoords(), out_div.size * sizeof(openvdb::Coord), cudaMemcpyHostToHost, stream));
+
+	cudaCheck(cudaHostUnregister(in_data.pCoords()));
+	cudaCheck(cudaHostUnregister(out_div.pValues()));
+	cudaCheck(cudaHostUnregister(out_div.pCoords()));
+
+	cudaCheck(cudaFreeAsync(d_coord, stream));
+	cudaCheck(cudaFreeAsync(d_value, stream));
 }

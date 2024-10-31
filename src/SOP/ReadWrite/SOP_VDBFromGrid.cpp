@@ -26,7 +26,7 @@ export back value / coord to the CPU to build the grid.
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
 
-extern "C" void pointToGridFloat(const HNS::OpenFloatGrid& in_data, float voxelSize, HNS::NanoFloatGrid& out_data,
+extern "C" void pointToGridFloat(HNS::OpenFloatGrid& in_data, float voxelSize, HNS::NanoFloatGrid& out_data,
                                  const cudaStream_t& stream);
 
 

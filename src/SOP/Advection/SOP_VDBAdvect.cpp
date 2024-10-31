@@ -131,8 +131,8 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 				openvdb::tree::ValueAccessor<openvdb::FloatTree> accessor(out->tree());
 
 				for (size_t i = 0; i < out_data.size; ++i) {
-					auto& coord = out_data.pCoords[i];
-					auto value = out_data.pValues[i];
+					auto& coord = out_data.pCoords()[i];
+					auto value = out_data.pValues()[i];
 					accessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
 				}
 

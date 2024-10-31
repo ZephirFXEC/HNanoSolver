@@ -100,8 +100,8 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 		openvdb::tree::ValueAccessor<openvdb::VectorTree> accessor(grid->tree());
 
 		for (size_t i = 0; i < out_data.size; ++i) {
-			const auto& coord = out_data.pCoords[i];
-			const auto& value = out_data.pValues[i];
+			const auto& coord = out_data.pCoords()[i];
+			const auto& value = out_data.pValues()[i];
 
 			accessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()),
 			                    openvdb::Vec3f(value[0], value[1], value[2]));

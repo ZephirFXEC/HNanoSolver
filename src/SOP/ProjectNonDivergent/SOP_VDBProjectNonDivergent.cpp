@@ -91,14 +91,7 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 	{
 		ScopedTimer timer("Computing Divergence");
 
-		out_data.size = open_out_data.size;
-		out_data.pCoords = new nanovdb::Coord[out_data.size];
-		memcpy_s(out_data.pCoords, out_data.size * sizeof(nanovdb::Coord), (nanovdb::Coord*)open_out_data.pCoords,
-		         open_out_data.size * sizeof(openvdb::Coord));
-
-		out_data.pValues = new float[out_data.size];
-
-		ComputeDivergence(sopcache->pHandle, out_data, stream);
+		ComputeDivergence(sopcache->pHandle, open_out_data, out_data, stream);
 	}
 
 
@@ -114,11 +107,13 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 		openvdb::tree::ValueAccessor<openvdb::FloatTree> accessor(out->tree());
 
 		for (size_t i = 0; i < out_data.size; ++i) {
-			auto& coord = out_data.pCoords[i];
-			auto value = out_data.pValues[i];
+			auto& coord = out_data.pCoords()[i];
+			auto value = out_data.pValues()[i];
 			accessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
 		}
 
 		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, "divergence");
 	}
+
+	cudaStreamDestroy(stream);
 }

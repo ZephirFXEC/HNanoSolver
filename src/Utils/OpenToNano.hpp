@@ -69,8 +69,7 @@ struct SimdCopy {
 			}
 			_mm_sfence();
 		} else if constexpr (sizeof(T) % 16 == 0) {
-			__movsq(reinterpret_cast<unsigned __int64*>(dst), reinterpret_cast<const unsigned __int64*>(src),
-			        (count * sizeof(T)) / 8);
+			__movsq(reinterpret_cast<unsigned __int64*>(dst), reinterpret_cast<const unsigned __int64*>(src), (count * sizeof(T)) / 8);
 		} else {
 			memcpy(dst, src, count * sizeof(T));
 		}
@@ -137,10 +136,8 @@ void extractFromOpenVDB_v2(const typename GridT::ConstPtr& grid, GridData<CoordT
 
 				if (buffer.coords.size() >= ThreadBuffer<CoordT, ValueT>::CHUNK_SIZE) {
 					// Direct copy to pre-calculated position
-					SimdCopy<CoordT>::copy(out_data.pCoords + buffer.writeOffset + localOffset, buffer.coords.data(),
-					                       buffer.coords.size());
-					SimdCopy<ValueT>::copy(out_data.pValues + buffer.writeOffset + localOffset, buffer.values.data(),
-					                       buffer.values.size());
+					SimdCopy<CoordT>::copy(out_data.pCoords + buffer.writeOffset + localOffset, buffer.coords.data(), buffer.coords.size());
+					SimdCopy<ValueT>::copy(out_data.pValues + buffer.writeOffset + localOffset, buffer.values.data(), buffer.values.size());
 
 					localOffset += buffer.coords.size();
 					buffer.coords.clear();
@@ -150,10 +147,8 @@ void extractFromOpenVDB_v2(const typename GridT::ConstPtr& grid, GridData<CoordT
 
 			// Copy remaining data
 			if (!buffer.coords.empty()) {
-				SimdCopy<CoordT>::copy(out_data.pCoords + buffer.writeOffset + localOffset, buffer.coords.data(),
-				                       buffer.coords.size());
-				SimdCopy<ValueT>::copy(out_data.pValues + buffer.writeOffset + localOffset, buffer.values.data(),
-				                       buffer.values.size());
+				SimdCopy<CoordT>::copy(out_data.pCoords + buffer.writeOffset + localOffset, buffer.coords.data(), buffer.coords.size());
+				SimdCopy<ValueT>::copy(out_data.pValues + buffer.writeOffset + localOffset, buffer.values.data(), buffer.values.size());
 			}
 		}
 	});
@@ -164,21 +159,15 @@ template <typename GridT, typename ValueT>
 void extractFromOpenVDB(const typename GridT::ConstPtr& grid, OpenGrid<ValueT>& out_data) {
 	const auto& tree = grid->tree();
 
-	out_data.allocateAligned(tree.activeVoxelCount(), 64);
+	out_data.allocateStandard(tree.activeVoxelCount());
 
 	std::atomic<size_t> writePos{0};
-	// Increased chunk size for better cache utilization
 	constexpr size_t chunkSize = 1024;
 
-	// Thread-local buffers with MSVC's __declspec(thread)
-#pragma warning(push)
-#pragma warning(disable : 4324)  // structure padding warning
-	struct alignas(64) ThreadLocalBuffers {
+	struct ThreadLocalBuffers {
 		std::vector<openvdb::Coord> coords;
 		std::vector<ValueT> values;
-		char padding[64];  // Prevent false sharing
 	};
-#pragma warning(pop)
 
 	thread_local ThreadLocalBuffers buffers;
 	openvdb::tree::NodeManager<const typename GridT::TreeType> nodeManager(tree);
@@ -210,16 +199,14 @@ void extractFromOpenVDB(const typename GridT::ConstPtr& grid, OpenGrid<ValueT>& 
 				// Use MSVC intrinsics for memory copy if available
 				if constexpr (sizeof(openvdb::Coord) % 16 == 0) {
 					__movsq(reinterpret_cast<unsigned __int64*>(out_data.pCoords() + pos),
-					        reinterpret_cast<const unsigned __int64*>(localCoords.data()),
-					        (count * sizeof(openvdb::Coord)) / 8);
+					        reinterpret_cast<const unsigned __int64*>(localCoords.data()), (count * sizeof(openvdb::Coord)) / 8);
 				} else {
 					memcpy(out_data.pCoords() + pos, localCoords.data(), count * sizeof(openvdb::Coord));
 				}
 
 				if constexpr (sizeof(ValueT) % 16 == 0) {
 					__movsq(reinterpret_cast<unsigned __int64*>(out_data.pValues() + pos),
-					        reinterpret_cast<const unsigned __int64*>(localValues.data()),
-					        (count * sizeof(ValueT)) / 8);
+					        reinterpret_cast<const unsigned __int64*>(localValues.data()), (count * sizeof(ValueT)) / 8);
 				} else {
 					memcpy(out_data.pValues() + pos, localValues.data(), count * sizeof(ValueT));
 				}

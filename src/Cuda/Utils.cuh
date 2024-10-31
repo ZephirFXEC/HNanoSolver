@@ -31,63 +31,55 @@ struct CudaResources {
 	nanovdb::Coord* d_coords = nullptr;
 	ValueT* d_values = nullptr;
 	ValueT* d_temp_values = nullptr;
-	cudaEvent_t beenCopied;
-	bool initialized;
+	cudaEvent_t ValueBeenCopied, ValueBeenMalloced, CoordBeenCopied, CoordBeenMalloced;
 
-	__host__ CudaResources(const size_t npoints, const cudaStream_t& stream) : initialized(false) {
-		cudaError_t err;
+	__host__ CudaResources(const size_t npoints, const cudaStream_t& stream) {
 
-		err = cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream);
-		if (err != cudaSuccess) throw std::runtime_error("Failed to allocate d_coords");
+		cudaCheck(cudaEventCreateWithFlags(&CoordBeenMalloced, cudaEventDisableTiming));
+		cudaCheck(cudaEventCreateWithFlags(&ValueBeenMalloced, cudaEventDisableTiming));
+		cudaCheck(cudaEventCreateWithFlags(&CoordBeenCopied, cudaEventDisableTiming));
+		cudaCheck(cudaEventCreateWithFlags(&ValueBeenCopied, cudaEventDisableTiming));
 
-		err = cudaMallocAsync(&d_values, npoints * sizeof(ValueT), stream);
-		if (err != cudaSuccess) {
-			cudaFreeAsync(d_coords, stream);
-			throw std::runtime_error("Failed to allocate d_values");
-		}
+		cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream));
+		cudaCheck(cudaEventRecord(CoordBeenMalloced, stream));
 
-		err = cudaMallocAsync(&d_temp_values, npoints * sizeof(ValueT), stream);
-		if (err != cudaSuccess) {
-			cudaFreeAsync(d_coords, stream);
-			cudaFreeAsync(d_values, stream);
-			throw std::runtime_error("Failed to allocate d_temp_values");
-		}
+		cudaCheck(cudaMallocAsync(&d_values, npoints * sizeof(ValueT), stream));
+		cudaCheck(cudaEventRecord(ValueBeenMalloced, stream));
 
-		err = cudaEventCreateWithFlags(&beenCopied, cudaEventDisableTiming);
-		if (err != cudaSuccess) {
-			clear(stream);
-			throw std::runtime_error("Failed to create CUDA event");
-		}
-
-		initialized = true;
-		cudaEventRecord(beenCopied, stream);
+		cudaCheck(cudaMallocAsync(&d_temp_values, npoints * sizeof(ValueT), stream));
 	}
 
-	// Remove the destructor and handle cleanup explicitly
-	__host__ void cleanup(const cudaStream_t& stream) {
-		if (initialized) {
-			cudaStreamSynchronize(stream);
-			clear(stream);
-		}
+	template <typename ValueInT>
+	__host__ void LoadPointData(const HNS::OpenGrid<ValueInT>& in_data, const cudaStream_t& stream) {
+		cudaCheck(cudaStreamWaitEvent(stream, CoordBeenMalloced, 0));
+		cudaCheck(cudaStreamWaitEvent(stream, ValueBeenMalloced, 0));
+
+		cudaCheck(cudaMemcpyAsync(d_coords, (nanovdb::Coord*)in_data.pCoords(), in_data.size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
+		cudaCheck(cudaEventRecord(CoordBeenCopied, stream));
+
+		cudaCheck(cudaMemcpyAsync(d_values, (ValueT*)in_data.pValues(), in_data.size * sizeof(ValueT), cudaMemcpyHostToDevice, stream));
+		cudaCheck(cudaEventRecord(ValueBeenCopied, stream));
 	}
 
-	__host__ void waitForInit(const cudaStream_t& stream) const {
-		if (initialized) {
-			cudaStreamWaitEvent(stream, beenCopied);
-		}
+	__host__ void UnloadPointData(HNS::NanoGrid<ValueT>& out_data, const cudaStream_t& stream) {
+		cudaCheck(cudaMemcpyAsync(out_data.pValues(), d_temp_values, out_data.size * sizeof(ValueT), cudaMemcpyDeviceToHost, stream));
+		cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost, stream));
 	}
 
-	__host__ __device__ bool isReady() const { return initialized && (cudaEventQuery(beenCopied) == cudaSuccess); }
+	__host__ void cleanup(const cudaStream_t& stream) const {
+		cudaCheck(cudaStreamSynchronize(stream));
+		clear(stream);
+	}
 
-	__host__ void clear(const cudaStream_t& stream) {
-		if (initialized) {
-			cudaStreamSynchronize(stream);
-			cudaFreeAsync(d_coords, stream);
-			cudaFreeAsync(d_values, stream);
-			cudaFreeAsync(d_temp_values, stream);
-			cudaEventDestroy(beenCopied);
-			initialized = false;
-		}
+	__host__ void clear(const cudaStream_t& stream) const {
+		if (d_coords) cudaFreeAsync(d_coords, stream);
+		if (d_values) cudaFreeAsync(d_values, stream);
+		if (d_temp_values) cudaFreeAsync(d_temp_values, stream);
+
+		cudaCheck(cudaEventDestroy(CoordBeenMalloced));
+		cudaCheck(cudaEventDestroy(ValueBeenMalloced));
+		cudaCheck(cudaEventDestroy(CoordBeenCopied));
+		cudaCheck(cudaEventDestroy(ValueBeenCopied));
 	}
 };
 
@@ -97,8 +89,7 @@ struct HostMemoryManager {
 	HNS::NanoGrid<ValueOutT>& out_data;
 	bool registered;
 
-	HostMemoryManager(const HNS::OpenGrid<ValueInT>& in, HNS::NanoGrid<ValueOutT>& out)
-	    : in_data(in), out_data(out), registered(false) {
+	HostMemoryManager(const HNS::OpenGrid<ValueInT>& in, HNS::NanoGrid<ValueOutT>& out) : in_data(in), out_data(out), registered(false) {
 		cudaError_t err;
 
 		// Register input memory
@@ -125,29 +116,3 @@ struct HostMemoryManager {
 	HostMemoryManager(const HostMemoryManager&) = delete;
 	HostMemoryManager& operator=(const HostMemoryManager&) = delete;
 };
-
-template <typename ValueInT, typename ValueOutT>
-void LoadPointData(CudaResources<ValueOutT>& resources, const HNS::OpenGrid<ValueInT>& in_data, const size_t npoints,
-                   const cudaStream_t& stream) {
-	resources.waitForInit(stream);
-
-	cudaMemcpyAsync(resources.d_coords, (nanovdb::Coord*)in_data.pCoords(), npoints * sizeof(openvdb::Coord),
-	                cudaMemcpyHostToDevice, stream);
-	cudaMemcpyAsync(resources.d_values, (ValueOutT*)in_data.pValues(), npoints * sizeof(ValueOutT),
-	                cudaMemcpyHostToDevice, stream);
-
-	cudaEventRecord(resources.beenCopied, stream);
-	cudaStreamWaitEvent(stream, resources.beenCopied);
-}
-
-template <typename ValueT>
-void UnloadPointData(CudaResources<ValueT>& resources, HNS::NanoGrid<ValueT>& out_data, const size_t npoints,
-                     const cudaStream_t& stream) {
-	cudaMemcpyAsync(out_data.pValues(), resources.d_temp_values, npoints * sizeof(ValueT), cudaMemcpyDeviceToHost,
-	                stream);
-	cudaMemcpyAsync(out_data.pCoords(), resources.d_coords, npoints * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost,
-	                stream);
-
-	cudaEventRecord(resources.beenCopied, stream);
-	cudaStreamWaitEvent(stream, resources.beenCopied);
-}

@@ -151,8 +151,8 @@ GridHandle<BufferT>
 cudaVoxelsToGrid(const PtrT dGridVoxels,
                  size_t voxelCount,
                  double voxelSize = 1.0,
-                 const BufferT &buffer = BufferT(),
-                 cudaStream_t stream = 0);
+                 cudaStream_t stream = 0,
+                 const BufferT &buffer = BufferT());
 
 //================================================================================================
 
@@ -387,27 +387,36 @@ private:
         size_t scratchSize, actualScratchSize;
         Allocator() : d_scratch(nullptr), scratchSize(0), actualScratchSize(0) {}
         ~Allocator() {
-            if (scratchSize > 0) this->free(d_scratch);// a bug in cub makes this necessary
+            if (scratchSize > 0 && d_scratch) this->free(d_scratch);// a bug in cub makes this necessary
             mAllocator.FreeAllCached();
         }
-        template <typename T>
-        T* alloc(size_t count, cudaStream_t stream) {
-            T* d_ptr = nullptr;
-            cudaCheck(mAllocator.DeviceAllocate((void**)&d_ptr, sizeof(T)*count, stream));
-            return d_ptr;
+    	template <typename T>
+		 T* alloc(const size_t count, cudaStream_t stream) {
+        	T* d_ptr = nullptr;
+			if (cudaError_t err = mAllocator.DeviceAllocate((void **)&d_ptr, sizeof(T) * count, stream); err != cudaSuccess)
+				throw std::runtime_error("Allocation failed");
+
+        	return d_ptr;
         }
         void free(void *d_ptr) {if (d_ptr) cudaCheck(mAllocator.DeviceFree(d_ptr));}
         template<class... T>
-        void free(void *d_ptr, T... other) {
-            if (d_ptr) cudaCheck(mAllocator.DeviceFree(d_ptr));
-            this->free(other...);
+		  void free(void *d_ptr, T... other) {
+        	free(d_ptr);
+        	free(other...);
         }
-        void adjustScratch(cudaStream_t stream){
-            if (scratchSize > actualScratchSize) {
-                if (actualScratchSize>0) cudaCheck(mAllocator.DeviceFree(d_scratch));
-                cudaCheck(mAllocator.DeviceAllocate((void**)&d_scratch, scratchSize, stream));
-                actualScratchSize = scratchSize;
-            }
+        void adjustScratch(cudaStream_t stream) {
+	        if (scratchSize > actualScratchSize) {
+	        	if (actualScratchSize > 0 && d_scratch) {
+	        		cudaCheck(mAllocator.DeviceFree(d_scratch));
+	        		d_scratch = nullptr; // Avoid reusing stale pointers
+	        	}
+	        	cudaError_t err = mAllocator.DeviceAllocate((void**)&d_scratch, scratchSize, stream);
+	        	if (err == cudaSuccess) {
+	        		actualScratchSize = scratchSize;
+	        	} else {
+	        		throw std::runtime_error("Failed to adjust scratch memory");
+	        	}
+	        }
         }
     } mMemPool;
 
@@ -1304,7 +1313,7 @@ cudaPointsToGrid(const PtrT d_xyz, int pointCount, double voxelSize, PointType t
 
 template<typename BuildT, typename PtrT, typename BufferT, typename AllocT>
 GridHandle<BufferT>// Grid<BuildT>
-cudaVoxelsToGrid(const PtrT d_ijk, size_t voxelCount, double voxelSize, const BufferT &buffer, cudaStream_t stream)
+cudaVoxelsToGrid(const PtrT d_ijk, size_t voxelCount, double voxelSize,  cudaStream_t stream, const BufferT &buffer)
 {
     CudaPointsToGrid<BuildT, AllocT> converter(voxelSize, Vec3d(0.0), stream);
     return converter.getHandle(d_ijk, voxelCount, buffer);
@@ -1339,7 +1348,8 @@ GridHandle<BufferT>
 cudaVoxelsToGrid(std::vector<std::tuple<const PtrT,size_t,double>> vec, const BufferT &buffer, cudaStream_t stream)
 {
     std::vector<GridHandle<BufferT>> handles;
-    for (auto &p : vec) handles.push_back(cudaVoxelsToGrid<BuildT, PtrT, BufferT, AllocT>(std::get<0>(p), std::get<1>(p), std::get<2>(p), buffer, stream));
+    for (auto &p : vec)
+        handles.push_back(cudaVoxelsToGrid<BuildT, PtrT, BufferT, AllocT>(std::get<0>(p), std::get<1>(p), std::get<2>(p), buffer, stream));
     return mergeDeviceGrids(handles, stream);
 }
 
