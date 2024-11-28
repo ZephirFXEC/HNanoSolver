@@ -26,6 +26,52 @@ inline size_t blocksPerGrid(const size_t numItems, const size_t threadsPerBlock)
 	return (numItems + threadsPerBlock - 1) / threadsPerBlock;
 }
 
+template <typename T>
+inline __device__ T computeError(const T& value, const T& value_backward) {
+	return static_cast<T>(0.5f) * (value - value_backward);
+}
+
+inline __device__ float absValue(const float x) {
+	return fabsf(x);
+}
+
+inline __device__ nanovdb::Vec3f absValue(const nanovdb::Vec3f& v) {
+	return nanovdb::Vec3f(fabsf(v[0]), fabsf(v[1]), fabsf(v[2]));
+}
+
+template <typename T>
+inline __device__ T computeMaxCorrection(const T& value_forward, const T& value) {
+	return static_cast<T>(0.5f) * absValue(value_forward - value);
+}
+
+inline __device__ float clampValue(const float x, const float minVal, const float maxVal) {
+	return fminf(fmaxf(x, minVal), maxVal);
+}
+
+inline __device__ nanovdb::Vec3f clampValue(const nanovdb::Vec3f& x, const nanovdb::Vec3f& minVal, const nanovdb::Vec3f& maxVal) {
+	return nanovdb::Vec3f(
+	    fminf(fmaxf(x[0], minVal[0]), maxVal[0]),
+	    fminf(fmaxf(x[1], minVal[1]), maxVal[1]),
+	    fminf(fmaxf(x[2], minVal[2]), maxVal[2])
+	);
+}
+
+inline __device__ float lerp(const float a, const float b, const float t) {
+	return a + t * (b - a);
+}
+
+inline __device__ nanovdb::Vec3f lerp(const nanovdb::Vec3f& a, const nanovdb::Vec3f& b, const float t) {
+	return a + (b - a) * t;
+}
+
+inline __device__ float enforceNonNegative(const float x) {
+	return fmaxf(0.0f, x);
+}
+
+inline __device__ nanovdb::Vec3f enforceNonNegative(const nanovdb::Vec3f& v) {
+	return v;
+}
+
 template <typename ValueT>
 struct CudaResources {
 	nanovdb::Coord* d_coords = nullptr;
