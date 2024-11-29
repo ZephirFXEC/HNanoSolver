@@ -16,9 +16,6 @@ class SOP_HNanoVDBFromGrid final : public SOP_Node {
    public:
 	SOP_HNanoVDBFromGrid(OP_Network* net, const char* name, OP_Operator* op) : SOP_Node(net, name, op) {
 		mySopFlags.setManagesDataIDs(true);
-
-		// It means we cook at every frame change.
-		OP_Node::flags().setTimeDep(true);
 	}
 
 	~SOP_HNanoVDBFromGrid() override = default;

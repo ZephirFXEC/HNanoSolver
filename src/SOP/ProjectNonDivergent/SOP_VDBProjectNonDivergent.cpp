@@ -3,9 +3,12 @@
 //
 
 #include "SOP_VDBProjectNonDivergent.hpp"
+#define NANOVDB_USE_OPENVDB
 
 #include <UT/UT_DSOVersion.h>
 #include <nanovdb/NanoVDB.h>
+#include <nanovdb/util/CreateNanoGrid.h>
+#include <nanovdb/util/GridBuilder.h>
 
 #include <Utils/OpenToNano.hpp>
 #include <Utils/ScopedTimer.hpp>
@@ -45,16 +48,14 @@ PRM_Template* SOP_HNanoVDBProjectNonDivergent::buildTemplates() {
 
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanoprojectnondivergent", "HNanoProjectNonDivergent",
-	                                   SOP_HNanoVDBProjectNonDivergent::myConstructor,
-	                                   SOP_HNanoVDBProjectNonDivergent::buildTemplates(), 1, 1, nullptr, 0));
+	                                   SOP_HNanoVDBProjectNonDivergent::myConstructor, SOP_HNanoVDBProjectNonDivergent::buildTemplates(), 1,
+	                                   1, nullptr, 0));
 }
 
 
 const SOP_NodeVerb::Register<SOP_HNanoVDBProjectNonDivergentVerb> SOP_HNanoVDBProjectNonDivergentVerb::theVerb;
 
-const SOP_NodeVerb* SOP_HNanoVDBProjectNonDivergent::cookVerb() const {
-	return SOP_HNanoVDBProjectNonDivergentVerb::theVerb.get();
-}
+const SOP_NodeVerb* SOP_HNanoVDBProjectNonDivergent::cookVerb() const { return SOP_HNanoVDBProjectNonDivergentVerb::theVerb.get(); }
 
 
 void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const {
@@ -73,18 +74,20 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 		cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
 	}
 
-	HNS::OpenVectorGrid open_out_data;
-	{
-		ScopedTimer timer("Extracting voxels from " + in_velocity->getName());
-		HNS::extractFromOpenVDB<openvdb::VectorGrid, openvdb::Vec3f>(in_velocity, open_out_data);
-	}
-
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
 
+	HNS::OpenVectorGrid open_out_data;
 	{
-		ScopedTimer timer("Converting " + in_velocity->getName() + " to NanoVDB");
-		pointToGridVectorToDevice(open_out_data, in_velocity->voxelSize()[0], sopcache->pHandle, stream);
+		{
+			ScopedTimer timer("Extracting voxels from " + in_velocity->getName());
+			HNS::extractFromOpenVDB<openvdb::VectorGrid, openvdb::Vec3f>(in_velocity, open_out_data);
+		}
+
+		{
+			ScopedTimer timer("Converting " + in_velocity->getName() + " to NanoVDB");
+			pointToGridVectorToDevice(open_out_data, in_velocity->voxelSize()[0], sopcache->pHandle, stream);
+		}
 	}
 
 	HNS::NanoFloatGrid out_data;
@@ -104,7 +107,7 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 
 		detail->clearAndDestroy();
 
-		openvdb::tree::ValueAccessor<openvdb::FloatTree> accessor(out->tree());
+		openvdb::tree::ValueAccessor<openvdb::FloatTree, false> accessor(out->tree());
 
 		for (size_t i = 0; i < out_data.size; ++i) {
 			auto& coord = out_data.pCoords()[i];

@@ -27,138 +27,177 @@ inline size_t blocksPerGrid(const size_t numItems, const size_t threadsPerBlock)
 }
 
 template <typename T>
-inline __device__ T computeError(const T& value, const T& value_backward) {
+__device__ __forceinline__ T computeError(const T& value, const T& value_backward) {
 	return static_cast<T>(0.5f) * (value - value_backward);
 }
 
-inline __device__ float absValue(const float x) {
-	return fabsf(x);
-}
+__device__ __forceinline__ float absValue(const float x) { return fabsf(x); }
 
-inline __device__ nanovdb::Vec3f absValue(const nanovdb::Vec3f& v) {
+__device__ __forceinline__ nanovdb::Vec3f absValue(const nanovdb::Vec3f& v) {
 	return nanovdb::Vec3f(fabsf(v[0]), fabsf(v[1]), fabsf(v[2]));
 }
 
 template <typename T>
-inline __device__ T computeMaxCorrection(const T& value_forward, const T& value) {
+__device__ __forceinline__ T computeMaxCorrection(const T& value_forward, const T& value) {
 	return static_cast<T>(0.5f) * absValue(value_forward - value);
 }
 
-inline __device__ float clampValue(const float x, const float minVal, const float maxVal) {
+__device__ __forceinline__ float clampValue(const float x, const float minVal, const float maxVal) {
 	return fminf(fmaxf(x, minVal), maxVal);
 }
 
-inline __device__ nanovdb::Vec3f clampValue(const nanovdb::Vec3f& x, const nanovdb::Vec3f& minVal, const nanovdb::Vec3f& maxVal) {
-	return nanovdb::Vec3f(
-	    fminf(fmaxf(x[0], minVal[0]), maxVal[0]),
-	    fminf(fmaxf(x[1], minVal[1]), maxVal[1]),
-	    fminf(fmaxf(x[2], minVal[2]), maxVal[2])
-	);
+__device__ __forceinline__ nanovdb::Vec3f clampValue(const nanovdb::Vec3f& x, const nanovdb::Vec3f& minVal, const nanovdb::Vec3f& maxVal) {
+	return nanovdb::Vec3f(fminf(fmaxf(x[0], minVal[0]), maxVal[0]), fminf(fmaxf(x[1], minVal[1]), maxVal[1]),
+	                      fminf(fmaxf(x[2], minVal[2]), maxVal[2]));
 }
 
-inline __device__ float lerp(const float a, const float b, const float t) {
-	return a + t * (b - a);
-}
+__device__ __forceinline__ float lerp(const float a, const float b, const float t) { return a + t * (b - a); }
 
-inline __device__ nanovdb::Vec3f lerp(const nanovdb::Vec3f& a, const nanovdb::Vec3f& b, const float t) {
-	return a + (b - a) * t;
-}
+__device__ __forceinline__ nanovdb::Vec3f lerp(const nanovdb::Vec3f& a, const nanovdb::Vec3f& b, const float t) { return a + (b - a) * t; }
 
-inline __device__ float enforceNonNegative(const float x) {
-	return fmaxf(0.0f, x);
-}
+__device__ __forceinline__ float enforceNonNegative(const float x) { return fmaxf(0.0f, x); }
 
-inline __device__ nanovdb::Vec3f enforceNonNegative(const nanovdb::Vec3f& v) {
-	return v;
-}
+__device__ __forceinline__ nanovdb::Vec3f enforceNonNegative(const nanovdb::Vec3f& v) { return v; }
 
+
+template <typename ValueT, bool HasTemp>
+struct CudaResources;
+
+// Specialization when HasTemp is true
 template <typename ValueT>
-struct CudaResources {
-	nanovdb::Coord* d_coords = nullptr;
-	ValueT* d_values = nullptr;
-	ValueT* d_temp_values = nullptr;
-	cudaEvent_t ValueBeenCopied, ValueBeenMalloced, CoordBeenCopied, CoordBeenMalloced;
+struct CudaResources<ValueT, true> {
+    nanovdb::Coord* d_coords = nullptr;
+    ValueT* d_values = nullptr;
+    ValueT* d_temp_values = nullptr;
 
-	__host__ CudaResources(const size_t npoints, const cudaStream_t& stream) {
+    __host__ CudaResources(size_t npoints, cudaStream_t stream) {
+        // Allocate device memory asynchronously
+        cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream));
+        cudaCheck(cudaMallocAsync(&d_values, npoints * sizeof(ValueT), stream));
+        cudaCheck(cudaMallocAsync(&d_temp_values, npoints * sizeof(ValueT), stream));
+        // No need to synchronize here; subsequent operations will ensure proper sequencing
+    }
 
-		cudaCheck(cudaEventCreateWithFlags(&CoordBeenMalloced, cudaEventDisableTiming));
-		cudaCheck(cudaEventCreateWithFlags(&ValueBeenMalloced, cudaEventDisableTiming));
-		cudaCheck(cudaEventCreateWithFlags(&CoordBeenCopied, cudaEventDisableTiming));
-		cudaCheck(cudaEventCreateWithFlags(&ValueBeenCopied, cudaEventDisableTiming));
+    template <typename ValueInT>
+    __host__ void LoadPointData(const HNS::OpenGrid<ValueInT>& in_data, cudaStream_t stream) {
+        // Copy data from host to device asynchronously
+        cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(nanovdb::Coord),
+                                  cudaMemcpyHostToDevice, stream));
+        cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues(), in_data.size * sizeof(ValueInT),
+                                  cudaMemcpyHostToDevice, stream));
+    }
 
-		cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream));
-		cudaCheck(cudaEventRecord(CoordBeenMalloced, stream));
+    __host__ void LoadPointCoord(const nanovdb::Coord* in_data, size_t size, cudaStream_t stream) {
+        cudaCheck(cudaMemcpyAsync(d_coords, in_data, size * sizeof(nanovdb::Coord),
+                                  cudaMemcpyHostToDevice, stream));
+    }
 
-		cudaCheck(cudaMallocAsync(&d_values, npoints * sizeof(ValueT), stream));
-		cudaCheck(cudaEventRecord(ValueBeenMalloced, stream));
+    __host__ void LoadPointValue(const ValueT* in_data, size_t size, cudaStream_t stream) {
+        cudaCheck(cudaMemcpyAsync(d_values, in_data, size * sizeof(ValueT),
+                                  cudaMemcpyHostToDevice, stream));
+    }
 
-		cudaCheck(cudaMallocAsync(&d_temp_values, npoints * sizeof(ValueT), stream));
-	}
+    template <typename ValueOutT>
+    __host__ void UnloadPointData(HNS::NanoGrid<ValueOutT>& out_data, cudaStream_t stream) {
+        // Copy data from device to host asynchronously
+        cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(nanovdb::Coord),
+                                  cudaMemcpyDeviceToHost, stream));
+        cudaCheck(cudaMemcpyAsync(out_data.pValues(), d_temp_values, out_data.size * sizeof(ValueOutT),
+                                  cudaMemcpyDeviceToHost, stream));
+    }
 
-	template <typename ValueInT>
-	__host__ void LoadPointData(const HNS::OpenGrid<ValueInT>& in_data, const cudaStream_t& stream) {
-		cudaCheck(cudaStreamWaitEvent(stream, CoordBeenMalloced, 0));
-		cudaCheck(cudaStreamWaitEvent(stream, ValueBeenMalloced, 0));
+    __host__ void cleanup(cudaStream_t stream) {
+        // Synchronize the stream to ensure all operations are complete
+        cudaCheck(cudaStreamSynchronize(stream));
+        clear();
+    }
 
-		cudaCheck(cudaMemcpyAsync(d_coords, (nanovdb::Coord*)in_data.pCoords(), in_data.size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
-		cudaCheck(cudaEventRecord(CoordBeenCopied, stream));
-
-		cudaCheck(cudaMemcpyAsync(d_values, (ValueT*)in_data.pValues(), in_data.size * sizeof(ValueT), cudaMemcpyHostToDevice, stream));
-		cudaCheck(cudaEventRecord(ValueBeenCopied, stream));
-	}
-
-	__host__ void UnloadPointData(HNS::NanoGrid<ValueT>& out_data, const cudaStream_t& stream) {
-		cudaCheck(cudaMemcpyAsync(out_data.pValues(), d_temp_values, out_data.size * sizeof(ValueT), cudaMemcpyDeviceToHost, stream));
-		cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost, stream));
-	}
-
-	__host__ void cleanup(const cudaStream_t& stream) const {
-		cudaCheck(cudaStreamSynchronize(stream));
-		clear(stream);
-	}
-
-	__host__ void clear(const cudaStream_t& stream) const {
-		if (d_coords) cudaFreeAsync(d_coords, stream);
-		if (d_values) cudaFreeAsync(d_values, stream);
-		if (d_temp_values) cudaFreeAsync(d_temp_values, stream);
-
-		cudaCheck(cudaEventDestroy(CoordBeenMalloced));
-		cudaCheck(cudaEventDestroy(ValueBeenMalloced));
-		cudaCheck(cudaEventDestroy(CoordBeenCopied));
-		cudaCheck(cudaEventDestroy(ValueBeenCopied));
-	}
+    __host__ void clear() {
+        if (d_coords) cudaCheck(cudaFree(d_coords));
+        if (d_values) cudaCheck(cudaFree(d_values));
+        if (d_temp_values) cudaCheck(cudaFree(d_temp_values));
+        d_coords = nullptr;
+        d_values = nullptr;
+        d_temp_values = nullptr;
+    }
 };
 
-template <typename ValueInT, typename ValueOutT>
-struct HostMemoryManager {
-	const HNS::OpenGrid<ValueInT>& in_data;
-	HNS::NanoGrid<ValueOutT>& out_data;
-	bool registered;
+// Specialization when HasTemp is false
+template <typename ValueT>
+struct CudaResources<ValueT, false> {
+    nanovdb::Coord* d_coords = nullptr;
+    ValueT* d_values = nullptr;
 
-	HostMemoryManager(const HNS::OpenGrid<ValueInT>& in, HNS::NanoGrid<ValueOutT>& out) : in_data(in), out_data(out), registered(false) {
-		cudaError_t err;
+    __host__ CudaResources(size_t npoints, cudaStream_t stream) {
+        // Allocate device memory asynchronously
+        cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream));
+        cudaCheck(cudaMallocAsync(&d_values, npoints * sizeof(ValueT), stream));
+    }
 
-		// Register input memory
-		err = cudaHostRegister((void*)in_data.pCoords(), in_data.size * sizeof(openvdb::Coord), cudaHostRegisterReadOnly);
-		if (err != cudaSuccess) throw std::runtime_error("Failed to register input coords");
+    template <typename ValueInT>
+    __host__ void LoadPointData(const HNS::OpenGrid<ValueInT>& in_data, cudaStream_t stream) {
+        // Copy data from host to device asynchronously
+        cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(nanovdb::Coord),
+                                  cudaMemcpyHostToDevice, stream));
+        cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues(), in_data.size * sizeof(ValueInT),
+                                  cudaMemcpyHostToDevice, stream));
+    }
 
-		err = cudaHostRegister((void*)in_data.pValues(), in_data.size * sizeof(ValueInT), cudaHostRegisterReadOnly);
-		if (err != cudaSuccess) {
-			cudaHostUnregister((void*)in_data.pCoords());
-			throw std::runtime_error("Failed to register input values");
-		}
+    __host__ void LoadPointCoord(const openvdb::Coord* in_data, const size_t size, const cudaStream_t stream) const {
+        cudaCheck(cudaMemcpyAsync(d_coords, in_data, size * sizeof(nanovdb::Coord),
+                                  cudaMemcpyHostToDevice, stream));
+    }
 
-		registered = true;
-	}
+    __host__ void LoadPointValue(const ValueT* in_data, size_t size, cudaStream_t stream) {
+        cudaCheck(cudaMemcpyAsync(d_values, in_data, size * sizeof(ValueT),
+                                  cudaMemcpyHostToDevice, stream));
+    }
 
-	~HostMemoryManager() {
-		if (registered) {
-			cudaHostUnregister((void*)in_data.pCoords());
-			cudaHostUnregister((void*)in_data.pValues());
-		}
-	}
+    template <typename ValueOutT>
+    __host__ void UnloadPointData(HNS::NanoGrid<ValueOutT>& out_data, cudaStream_t stream) {
+        // Copy data from device to host asynchronously
+        cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(nanovdb::Coord),
+                                  cudaMemcpyDeviceToHost, stream));
+        cudaCheck(cudaMemcpyAsync(out_data.pValues(), d_values, out_data.size * sizeof(ValueOutT),
+                                  cudaMemcpyDeviceToHost, stream));
+    }
 
-	// Delete copy constructor and assignment operator
-	HostMemoryManager(const HostMemoryManager&) = delete;
-	HostMemoryManager& operator=(const HostMemoryManager&) = delete;
+    __host__ void cleanup(cudaStream_t stream) {
+        // Synchronize the stream to ensure all operations are complete
+        cudaCheck(cudaStreamSynchronize(stream));
+        clear();
+    }
+
+    __host__ void clear() {
+        if (d_coords) cudaCheck(cudaFree(d_coords));
+        if (d_values) cudaCheck(cudaFree(d_values));
+        d_coords = nullptr;
+        d_values = nullptr;
+    }
 };
+
+
+template <typename T, typename U = std::conditional_t<std::is_same_v<T, float>, nanovdb::FloatTree, nanovdb::Vec3fTree>>
+__global__ void set_grid_values(const CudaResources<T, true> ressources, const size_t npoints, nanovdb::Grid<U>* __restrict__ d_grid) {
+	auto accessor = d_grid->tree().getAccessor();
+
+	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+	if (tid >= npoints) return;
+
+	nanovdb::Coord coord = ressources.d_coords[tid];
+	T value = ressources.d_values[tid];
+
+	accessor.template set<nanovdb::SetVoxel<T>>(coord, value);
+}
+
+template <typename T, typename U = std::conditional_t<std::is_same_v<T, float>, nanovdb::FloatTree, nanovdb::Vec3fTree>>
+__global__ void get_grid_values(const CudaResources<T, true> ressources, const size_t npoints, nanovdb::Grid<U>* __restrict__ d_grid) {
+	auto accessor = d_grid->tree().getAccessor();
+
+	size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+	if (tid >= npoints) return;
+
+	const nanovdb::Coord coord = ressources.d_coords[tid];
+
+	ressources.d_temp_values[tid] = accessor.getValue(coord);
+}

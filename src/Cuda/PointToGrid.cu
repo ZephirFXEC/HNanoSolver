@@ -21,26 +21,20 @@ void pointToGridTemplate(HNS::OpenGrid<ValueInT>& in_data, const float voxelSize
 	cudaCheck(cudaHostRegister(in_data.pCoords(), npoints * sizeof(openvdb::Coord), cudaHostRegisterDefault));
 	cudaCheck(cudaHostRegister(in_data.pValues(), npoints * sizeof(ValueInT), cudaHostRegisterDefault));
 
-	CudaResources<ValueOutT> resources(npoints, stream);
+	CudaResources<ValueOutT, true> resources(npoints, stream);
 	resources.template LoadPointData<ValueInT>(in_data, stream);
 
-	cudaCheck(cudaStreamWaitEvent(stream, resources.CoordBeenCopied, 0));
+	cudaCheck(cudaStreamSynchronize(stream));
+
 	auto handle = nanovdb::cudaVoxelsToGrid<ValueOutT>(resources.d_coords, npoints, voxelSize);
 	nanovdb::NanoGrid<ValueOutT>* d_grid = handle.template deviceGrid<ValueOutT>();
 
 	constexpr unsigned int numThreads = 256;
 	const unsigned int numBlocks = blocksPerGrid(npoints, numThreads);
 
-	cudaCheck(cudaStreamWaitEvent(stream, resources.ValueBeenCopied, 0));
-	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(npoints, [=] __device__(const size_t tid) {
-		const auto accessor = d_grid->tree().getAccessor();
-		accessor.template set<nanovdb::SetVoxel<ValueOutT>>(resources.d_coords[tid], resources.d_values[tid]);
-	});
+	set_grid_values<ValueOutT><<<numBlocks, numThreads, 0, stream>>>(resources, npoints, d_grid);
 
-	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(npoints, [=] __device__(const size_t tid) {
-		const auto accessor = d_grid->tree().getAccessor();
-		resources.d_temp_values[tid] = accessor.getValue(resources.d_coords[tid]);
-	});
+	get_grid_values<ValueOutT><<<numBlocks, numThreads, 0, stream>>>(resources, npoints, d_grid);
 
 	out_data.allocateStandard(npoints);
 
@@ -58,35 +52,31 @@ void pointToGridTemplate(HNS::OpenGrid<ValueInT>& in_data, const float voxelSize
 }
 
 
-template <typename InputCoordT, typename InputValueT, typename OutputCoordT, typename OutputValueT, typename NanoGridType, typename NanoOpT>
-void pointToGridTemplateToDevice(HNS::OpenGrid<InputValueT>& in_data, const float voxelSize,
+template <typename ValueInT, typename ValueOutT>
+void pointToGridTemplateToDevice(HNS::OpenGrid<ValueInT>& in_data, const float voxelSize,
                                  nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream) {
 	const size_t npoints = in_data.size;
 
 	cudaCheck(cudaHostRegister(in_data.pCoords(), npoints * sizeof(openvdb::Coord), cudaHostRegisterDefault));
-	cudaCheck(cudaHostRegister(in_data.pValues(), npoints * sizeof(InputValueT), cudaHostRegisterDefault));
+	cudaCheck(cudaHostRegister(in_data.pValues(), npoints * sizeof(ValueInT), cudaHostRegisterDefault));
 
-	CudaResources<OutputValueT> resources(npoints, stream);
-	resources.template LoadPointData<InputValueT>(in_data, stream);
+	CudaResources<ValueOutT, true> resources(npoints, stream);
+	resources.template LoadPointData<ValueInT>(in_data, stream);
 
-	cudaStreamWaitEvent(stream, resources.CoordBeenCopied, 0);
-	handle = nanovdb::cudaVoxelsToGrid<OutputValueT>(resources.d_coords, npoints, voxelSize);
-	nanovdb::NanoGrid<OutputValueT>* d_grid = handle.deviceGrid<OutputValueT>();
+	cudaCheck(cudaStreamSynchronize(stream));
+
+	handle = nanovdb::cudaVoxelsToGrid<ValueOutT>(resources.d_coords, npoints, voxelSize);
+	nanovdb::NanoGrid<ValueOutT>* d_grid = handle.deviceGrid<ValueOutT>();
 
 	constexpr unsigned int numThreads = 256;
 	const unsigned int numBlocks = blocksPerGrid(npoints, numThreads);
 
-	cudaCheck(cudaStreamWaitEvent(stream, resources.ValueBeenCopied, 0));
-	lambdaKernel<<<numBlocks, numThreads, 0, stream>>>(npoints, [=] __device__(const size_t tid) {
-		const OutputCoordT& ijk = resources.d_coords[tid];
-		d_grid->tree().template set<NanoOpT>(ijk, resources.d_values[tid]);
-	});
-	cudaCheckError();
+	set_grid_values<ValueOutT><<<numBlocks, numThreads, 0, stream>>>(resources, npoints, d_grid);
 
 	cudaCheck(cudaHostUnregister(in_data.pCoords()));
 	cudaCheck(cudaHostUnregister(in_data.pValues()));
 
-	resources.clear(stream);
+	resources.cleanup(stream);
 }
 
 extern "C" void pointToGridFloat(HNS::OpenFloatGrid& in_data, const float voxelSize, HNS::NanoFloatGrid& out_data,
@@ -101,12 +91,11 @@ extern "C" void pointToGridVector(HNS::OpenVectorGrid& in_data, const float voxe
 
 extern "C" void pointToGridFloatToDevice(HNS::OpenFloatGrid& in_data, const float voxelSize,
                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream) {
-	pointToGridTemplateToDevice<openvdb::Coord, float, nanovdb::Coord, float, nanovdb::FloatGrid, nanovdb::SetVoxel<float>>(
+	pointToGridTemplateToDevice<float, float>(
 	    in_data, voxelSize, handle, stream);
 }
 
 extern "C" void pointToGridVectorToDevice(HNS::OpenVectorGrid& in_data, const float voxelSize,
                                           nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream) {
-	pointToGridTemplateToDevice<openvdb::Coord, openvdb::Vec3f, nanovdb::Coord, nanovdb::Vec3f, nanovdb::Vec3fGrid,
-	                            nanovdb::SetVoxel<nanovdb::Vec3f>>(in_data, voxelSize, handle, stream);
+	pointToGridTemplateToDevice<openvdb::Vec3f, nanovdb::Vec3f>(in_data, voxelSize, handle, stream);
 }
