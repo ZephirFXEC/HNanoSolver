@@ -12,8 +12,7 @@
 
 
 void newSopOperator(OP_OperatorTable* table) {
-	table->addOperator(new OP_Operator("hnanoadvectvelocity", "HNanoAdvectVelocity",
-	                                   SOP_HNanoAdvectVelocity::myConstructor,
+	table->addOperator(new OP_Operator("hnanoadvectvelocity", "HNanoAdvectVelocity", SOP_HNanoAdvectVelocity::myConstructor,
 	                                   SOP_HNanoAdvectVelocity::buildTemplates(), 1, 1, nullptr, OP_FLAG_GENERATOR));
 }
 
@@ -84,7 +83,7 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 		const float voxelSize = static_cast<float>(AGrid->voxelSize()[0]);
 		const float deltaTime = static_cast<float>(sopparms.getTimestep());
 
-		advect_points_to_grid_v(open_out_data, out_data, voxelSize, deltaTime, stream);
+		AdvectVector(open_out_data, out_data, voxelSize, deltaTime, stream);
 
 		boss.end();
 	}
@@ -103,8 +102,7 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 			const auto& coord = out_data.pCoords()[i];
 			const auto& value = out_data.pValues()[i];
 
-			accessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()),
-			                    openvdb::Vec3f(value[0], value[1], value[2]));
+			accessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), openvdb::Vec3f(value[0], value[1], value[2]));
 		}
 
 		GU_PrimVDB::buildFromGrid(*detail, grid, nullptr, AGrid->getName().c_str());

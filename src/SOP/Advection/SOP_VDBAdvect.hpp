@@ -4,9 +4,7 @@
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
 #include <SOP_VDBAdvectVelocity.proto.h>
-#include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/CreateNanoGrid.h>
-#include <nanovdb/util/NanoToOpenVDB.h>
+#include <nanovdb/util/GridHandle.h>
 #include <nanovdb/util/cuda/CudaDeviceBuffer.h>
 
 #include "SOP_VDBAdvect.proto.h"
@@ -15,17 +13,13 @@
 
 class SOP_HNanoVDBAdvect final : public SOP_Node {
    public:
-	SOP_HNanoVDBAdvect(OP_Network* net, const char* name, OP_Operator* op) : SOP_Node(net, name, op) {
-		mySopFlags.setManagesDataIDs(true);
-	}
+	SOP_HNanoVDBAdvect(OP_Network* net, const char* name, OP_Operator* op) : SOP_Node(net, name, op) { mySopFlags.setManagesDataIDs(true); }
 
 	~SOP_HNanoVDBAdvect() override = default;
 
 	static PRM_Template* buildTemplates();
 
-	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) {
-		return new SOP_HNanoVDBAdvect(net, name, op);
-	}
+	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) { return new SOP_HNanoVDBAdvect(net, name, op); }
 
 	OP_ERROR cookMySop(OP_Context& context) override { return cookMyselfAsVerb(context); }
 
@@ -77,9 +71,7 @@ class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
 };
 
 extern "C" void pointToGridVectorToDevice(HNS::OpenVectorGrid& in_data, float voxelSize,
-                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle,
-                                          const cudaStream_t& stream);
+                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream);
 
-extern "C" void advect_points_to_grid_f(HNS::OpenFloatGrid& in_data, const nanovdb::Vec3fGrid* vel_grid,
-                                        HNS::NanoFloatGrid& out_data, float voxelSize, float dt,
-                                        const cudaStream_t& stream);
+extern "C" void AdvectFloat(HNS::OpenFloatGrid& in_data, const nanovdb::Vec3fGrid* vel_grid, HNS::NanoFloatGrid& out_data, float voxelSize,
+                            float dt, const cudaStream_t& stream);

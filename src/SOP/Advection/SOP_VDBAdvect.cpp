@@ -82,7 +82,6 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 
 
 	{
-		boss.start();
 		ScopedTimer timer("Total Advection");
 
 		HNS::OpenVectorGrid vel_out_data;
@@ -101,47 +100,53 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 			vel_grid = sopcache->pBHandle.deviceGrid<nanovdb::Vec3f>();
 		}
 
-		for (auto& grid : AGrid) {
-			HNS::OpenFloatGrid open_out_data;
+		std::vector<HNS::NanoFloatGrid> out_data(AGrid.size());
+		std::vector<HNS::OpenFloatGrid> open_out_data(AGrid.size());
+		std::vector<cudaStream_t> streams(AGrid.size());
+		for (size_t i = 0; i < AGrid.size(); ++i) {
+			cudaStream_t s;
+			cudaStreamCreate(&s);
+			streams[i] = s;
+		}
+
+
+		for (size_t i = 0; i < AGrid.size(); ++i) {
 			{
-				ScopedTimer timer("Extracting voxels from " + grid->getName());
-				HNS::extractFromOpenVDB<openvdb::FloatGrid, float>(grid, open_out_data);
+				ScopedTimer timer("Extracting voxels from " + AGrid[i]->getName());
+				HNS::extractFromOpenVDB<openvdb::FloatGrid, float>(AGrid[i], open_out_data[i]);
 			}
 
-			HNS::NanoFloatGrid out_data;
 			{
-				const auto name = "Computing " + grid->getName() + " advection";
-				boss.start(name.c_str());
+				const auto name = "Computing " + AGrid[i]->getName() + " advection";
 				ScopedTimer timer(name);
 
-				const float voxelSize = static_cast<float>(grid->voxelSize()[0]);
+				const float voxelSize = static_cast<float>(AGrid[i]->voxelSize()[0]);
 				const float deltaTime = static_cast<float>(sopparms.getTimestep());
-				advect_points_to_grid_f(open_out_data, vel_grid, out_data, voxelSize, deltaTime, stream);
-
-				boss.end();
+				AdvectFloat(open_out_data[i], vel_grid, out_data[i], voxelSize, deltaTime, streams[i]);
 			}
 
 			{
-				ScopedTimer timer("Building Grid " + grid->getName());
+				ScopedTimer timer("Building Grid " + AGrid[i]->getName());
 
 				const openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create();
 				out->setGridClass(openvdb::GRID_FOG_VOLUME);
-				out->setTransform(openvdb::math::Transform::createLinearTransform(grid->voxelSize()[0]));
+				out->setTransform(openvdb::math::Transform::createLinearTransform(AGrid[i]->voxelSize()[0]));
 
 				openvdb::tree::ValueAccessor<openvdb::FloatTree> accessor(out->tree());
 
-				for (size_t i = 0; i < out_data.size; ++i) {
-					auto& coord = out_data.pCoords()[i];
-					auto value = out_data.pValues()[i];
+				for (size_t j = 0; j < out_data[i].size; ++j) {
+					auto& coord = out_data[i].pCoords()[j];
+					auto value = out_data[i].pValues()[j];
 					accessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
 				}
 
-				GU_PrimVDB::buildFromGrid(*detail, out, nullptr, grid->getName().c_str());
+				GU_PrimVDB::buildFromGrid(*detail, out, nullptr, AGrid[i]->getName().c_str());
 			}
 		}
-
-		boss.end();
 		cudaStreamDestroy(stream);
+		for (auto s : streams) {
+			cudaStreamDestroy(s);
+		}
 	}
 }
 

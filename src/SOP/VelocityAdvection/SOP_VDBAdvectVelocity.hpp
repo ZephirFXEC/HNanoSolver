@@ -22,9 +22,7 @@ class SOP_HNanoAdvectVelocity final : public SOP_Node {
 
 	static PRM_Template* buildTemplates();
 
-	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) {
-		return new SOP_HNanoAdvectVelocity(net, name, op);
-	}
+	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) { return new SOP_HNanoAdvectVelocity(net, name, op); }
 
 	OP_ERROR cookMySop(OP_Context& context) override { return cookMyselfAsVerb(context); }
 
@@ -58,13 +56,12 @@ class SOP_HNanoAdvectVelocityVerb final : public SOP_NodeVerb {
 
 	CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_GENERATOR; }
 
-	[[nodiscard]] static UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, openvdb::VectorGrid::Ptr& grid,
-	                                               const UT_StringHolder& group);
+	[[nodiscard]] static UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, openvdb::VectorGrid::Ptr& grid, const UT_StringHolder& group);
 
 	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
 	static const SOP_NodeVerb::Register<SOP_HNanoAdvectVelocityVerb> theVerb;
 	static const char* const theDsFile;
 };
 
-extern "C" void advect_points_to_grid_v(HNS::OpenVectorGrid& in_data, HNS::NanoVectorGrid& out_data,
-                                        float voxelSize, float dt, const cudaStream_t& stream);
+extern "C" void AdvectVector(HNS::OpenVectorGrid& in_data, HNS::NanoVectorGrid& out_data, float voxelSize, float dt,
+                             const cudaStream_t& stream);
