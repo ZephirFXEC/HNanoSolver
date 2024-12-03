@@ -6,7 +6,6 @@ project(HNanoSolver LANGUAGES CXX CUDA)
 
 add_compile_definitions(
         SESI_OPENVDB
-        TRACY_ENABLE
 )
 
 # ------- Find CUDA -----------
@@ -18,15 +17,11 @@ set(BUILD_SHARED_LIBS ON)
 add_subdirectory(src/Cuda)
 # ------- End CUDA -----------
 
+
 # ------- Find Houdini -----------
 list(APPEND CMAKE_PREFIX_PATH "$ENV{HFS}/toolkit/cmake" )
 find_package(Houdini REQUIRED)
 # ------- End Houdini -----------
-
-# ------- Find Tracy ------------
-find_package(Tracy CONFIG REQUIRED)
-# ------- End Tracy ------------
-
 
 houdini_generate_proto_headers( FILES
         src/SOP/Advection/SOP_VDBAdvect.cpp
@@ -55,6 +50,28 @@ target_include_directories(Utils PUBLIC
 )
 ########################################################################################################################
 
+# ------- Compile HNanoViewer -
+add_subdirectory(src/HNanoViewer)
+# ------- End HNanoViewer -----
+
+########################  SOP_HNanoSolver library ###########################################################################
+add_library(SOP_HNanoSolver SHARED
+        src/SOP/HNanoSolver/SOP_HNanoSolver.cpp
+        src/SOP/HNanoSolver/SOP_HNanoSolver.hpp
+)
+target_link_libraries(SOP_HNanoSolver PRIVATE
+        Utils
+        Kernels
+        Houdini
+        "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
+)
+target_include_directories(SOP_HNanoSolver PRIVATE
+        src
+        ${CMAKE_CURRENT_BINARY_DIR}
+        $ENV{HFS}/toolkit/include
+)
+########################################################################################################################
+
 
 ########################  SOP_Advect library ###########################################################################
 add_library(SOP_Advect SHARED
@@ -65,7 +82,6 @@ target_link_libraries(SOP_Advect PRIVATE
         Utils
         Kernels
         Houdini
-        Tracy::TracyClient
         "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
 target_include_directories(SOP_Advect PRIVATE
@@ -86,7 +102,6 @@ target_link_libraries(SOP_ProjectNonDivergent PRIVATE
         Utils
         Kernels
         Houdini
-        Tracy::TracyClient
         "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
 target_include_directories(SOP_ProjectNonDivergent PRIVATE
@@ -106,7 +121,6 @@ target_link_libraries(SOP_AdvectVelocity PRIVATE
         Utils
         Kernels
         Houdini
-        Tracy::TracyClient
         "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
 target_include_directories(SOP_AdvectVelocity PRIVATE
@@ -126,7 +140,6 @@ target_link_libraries(SOP_VDBFromGrid PRIVATE
         Utils
         Kernels
         Houdini
-        Tracy::TracyClient
         "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib"
 )
 target_include_directories(SOP_VDBFromGrid PRIVATE
@@ -135,6 +148,7 @@ target_include_directories(SOP_VDBFromGrid PRIVATE
         $ENV{HFS}/toolkit/include
 )
 ########################################################################################################################
+#houdini_configure_target(SOP_HNanoSolver $ENV{DSO_Path})
 houdini_configure_target(SOP_VDBFromGrid $ENV{DSO_Path})
 houdini_configure_target(SOP_Advect $ENV{DSO_Path})
 houdini_configure_target(SOP_AdvectVelocity $ENV{DSO_Path})
