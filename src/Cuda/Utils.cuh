@@ -66,119 +66,110 @@ struct CudaResources;
 // Specialization when HasTemp is true
 template <typename ValueT>
 struct CudaResources<ValueT, true> {
-    nanovdb::Coord* d_coords = nullptr;
-    ValueT* d_values = nullptr;
-    ValueT* d_temp_values = nullptr;
+	nanovdb::Coord* d_coords = nullptr;
+	ValueT* d_values = nullptr;
+	ValueT* d_temp_values = nullptr;
 
-    __host__ CudaResources(size_t npoints, cudaStream_t stream) {
-        // Allocate device memory asynchronously
-        cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream));
-        cudaCheck(cudaMallocAsync(&d_values, npoints * sizeof(ValueT), stream));
-        cudaCheck(cudaMallocAsync(&d_temp_values, npoints * sizeof(ValueT), stream));
-        // No need to synchronize here; subsequent operations will ensure proper sequencing
-    }
+	__host__ CudaResources(size_t npoints, cudaStream_t stream) {
+		// Allocate device memory asynchronously
+		cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream));
+		cudaCheck(cudaMallocAsync(&d_values, npoints * sizeof(ValueT), stream));
+		cudaCheck(cudaMallocAsync(&d_temp_values, npoints * sizeof(ValueT), stream));
+		// No need to synchronize here; subsequent operations will ensure proper sequencing
+	}
 
-    template <typename ValueInT>
-    __host__ void LoadPointData(const HNS::OpenGrid<ValueInT>& in_data, cudaStream_t stream) {
-        // Copy data from host to device asynchronously
-        cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(nanovdb::Coord),
-                                  cudaMemcpyHostToDevice, stream));
-        cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues(), in_data.size * sizeof(ValueInT),
-                                  cudaMemcpyHostToDevice, stream));
-    }
+	template <typename ValueInT>
+	__host__ void LoadPointData(const HNS::OpenGrid<ValueInT>& in_data, cudaStream_t stream) {
+		// Copy data from host to device asynchronously
+		cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
+		cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues(), in_data.size * sizeof(ValueInT), cudaMemcpyHostToDevice, stream));
+	}
 
-    __host__ void LoadPointCoord(const nanovdb::Coord* in_data, size_t size, cudaStream_t stream) {
-        cudaCheck(cudaMemcpyAsync(d_coords, in_data, size * sizeof(nanovdb::Coord),
-                                  cudaMemcpyHostToDevice, stream));
-    }
+	__host__ void LoadPointCoord(const openvdb::Coord* in_data, size_t size, cudaStream_t stream) {
+		cudaCheck(cudaMemcpyAsync(d_coords, in_data, size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
+	}
 
-    __host__ void LoadPointValue(const ValueT* in_data, size_t size, cudaStream_t stream) {
-        cudaCheck(cudaMemcpyAsync(d_values, in_data, size * sizeof(ValueT),
-                                  cudaMemcpyHostToDevice, stream));
-    }
+	template <typename ValueInT>
+	__host__ void LoadPointValue(const ValueInT* in_data, size_t size, cudaStream_t stream) {
+		cudaCheck(cudaMemcpyAsync(d_values, in_data, size * sizeof(ValueT), cudaMemcpyHostToDevice, stream));
+	}
 
-    template <typename ValueOutT>
-    __host__ void UnloadPointData(HNS::NanoGrid<ValueOutT>& out_data, cudaStream_t stream) {
-        // Copy data from device to host asynchronously
-        cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(nanovdb::Coord),
-                                  cudaMemcpyDeviceToHost, stream));
-        cudaCheck(cudaMemcpyAsync(out_data.pValues(), d_temp_values, out_data.size * sizeof(ValueOutT),
-                                  cudaMemcpyDeviceToHost, stream));
-    }
+	template <typename ValueOutT>
+	__host__ void UnloadPointData(HNS::NanoGrid<ValueOutT>& out_data, cudaStream_t stream) {
+		// Copy data from device to host asynchronously
+		cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost, stream));
+		cudaCheck(cudaMemcpyAsync(out_data.pValues(), d_temp_values, out_data.size * sizeof(ValueOutT), cudaMemcpyDeviceToHost, stream));
+	}
 
-    __host__ void cleanup(cudaStream_t stream) {
-        // Synchronize the stream to ensure all operations are complete
-        cudaCheck(cudaStreamSynchronize(stream));
-        clear();
-    }
+	__host__ void cleanup(cudaStream_t stream) {
+		// Synchronize the stream to ensure all operations are complete
+		cudaCheck(cudaStreamSynchronize(stream));
+		clear();
+	}
 
-    __host__ void clear() {
-        if (d_coords) cudaCheck(cudaFree(d_coords));
-        if (d_values) cudaCheck(cudaFree(d_values));
-        if (d_temp_values) cudaCheck(cudaFree(d_temp_values));
-        d_coords = nullptr;
-        d_values = nullptr;
-        d_temp_values = nullptr;
-    }
+	__host__ void clear() {
+		if (d_coords) cudaCheck(cudaFree(d_coords));
+		if (d_values) cudaCheck(cudaFree(d_values));
+		if (d_temp_values) cudaCheck(cudaFree(d_temp_values));
+		d_coords = nullptr;
+		d_values = nullptr;
+		d_temp_values = nullptr;
+	}
 };
 
 // Specialization when HasTemp is false
 template <typename ValueT>
 struct CudaResources<ValueT, false> {
-    nanovdb::Coord* d_coords = nullptr;
-    ValueT* d_values = nullptr;
+	nanovdb::Coord* d_coords = nullptr;
+	ValueT* d_values = nullptr;
 
-    __host__ CudaResources(size_t npoints, cudaStream_t stream) {
-        // Allocate device memory asynchronously
-        cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream));
-        cudaCheck(cudaMallocAsync(&d_values, npoints * sizeof(ValueT), stream));
-    }
+	__host__ CudaResources(size_t npoints, cudaStream_t stream) {
+		// Allocate device memory asynchronously
+		cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream));
+		cudaCheck(cudaMallocAsync(&d_values, npoints * sizeof(ValueT), stream));
+	}
 
-    template <typename ValueInT>
-    __host__ void LoadPointData(const HNS::OpenGrid<ValueInT>& in_data, cudaStream_t stream) {
-        // Copy data from host to device asynchronously
-        cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(nanovdb::Coord),
-                                  cudaMemcpyHostToDevice, stream));
-        cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues(), in_data.size * sizeof(ValueInT),
-                                  cudaMemcpyHostToDevice, stream));
-    }
+	template <typename ValueInT>
+	__host__ void LoadPointData(const HNS::OpenGrid<ValueInT>& in_data, cudaStream_t stream) {
+		// Copy data from host to device asynchronously
+		cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
+		cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues(), in_data.size * sizeof(ValueInT), cudaMemcpyHostToDevice, stream));
+	}
 
-    __host__ void LoadPointCoord(const openvdb::Coord* in_data, const size_t size, const cudaStream_t stream) const {
-        cudaCheck(cudaMemcpyAsync(d_coords, in_data, size * sizeof(nanovdb::Coord),
-                                  cudaMemcpyHostToDevice, stream));
-    }
+	__host__ void LoadPointCoord(const openvdb::Coord* in_data, const size_t size, const cudaStream_t stream) const {
+		cudaCheck(cudaMemcpyAsync(d_coords, in_data, size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
+	}
 
-    __host__ void LoadPointValue(const ValueT* in_data, size_t size, cudaStream_t stream) {
-        cudaCheck(cudaMemcpyAsync(d_values, in_data, size * sizeof(ValueT),
-                                  cudaMemcpyHostToDevice, stream));
-    }
+	template <typename ValueInT>
+	__host__ void LoadPointValue(const ValueInT* in_data, size_t size, cudaStream_t stream) {
+		cudaCheck(cudaMemcpyAsync(d_values, in_data, size * sizeof(ValueT), cudaMemcpyHostToDevice, stream));
+	}
 
-    template <typename ValueOutT>
-    __host__ void UnloadPointData(HNS::NanoGrid<ValueOutT>& out_data, cudaStream_t stream) {
-        // Copy data from device to host asynchronously
-        cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(nanovdb::Coord),
-                                  cudaMemcpyDeviceToHost, stream));
-        cudaCheck(cudaMemcpyAsync(out_data.pValues(), d_values, out_data.size * sizeof(ValueOutT),
-                                  cudaMemcpyDeviceToHost, stream));
-    }
+	template <typename ValueOutT>
+	__host__ void UnloadPointData(HNS::NanoGrid<ValueOutT>& out_data, cudaStream_t stream) {
+		// Copy data from device to host asynchronously
+		cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost, stream));
+		cudaCheck(cudaMemcpyAsync(out_data.pValues(), d_values, out_data.size * sizeof(ValueOutT), cudaMemcpyDeviceToHost, stream));
+	}
 
-    __host__ void cleanup(cudaStream_t stream) {
-        // Synchronize the stream to ensure all operations are complete
-        cudaCheck(cudaStreamSynchronize(stream));
-        clear();
-    }
+	__host__ void cleanup(cudaStream_t stream) {
+		// Synchronize the stream to ensure all operations are complete
+		cudaCheck(cudaStreamSynchronize(stream));
+		clear();
+	}
 
-    __host__ void clear() {
-        if (d_coords) cudaCheck(cudaFree(d_coords));
-        if (d_values) cudaCheck(cudaFree(d_values));
-        d_coords = nullptr;
-        d_values = nullptr;
-    }
+	__host__ void clear() {
+		if (d_coords) cudaCheck(cudaFree(d_coords));
+		if (d_values) cudaCheck(cudaFree(d_values));
+		d_coords = nullptr;
+		d_values = nullptr;
+	}
 };
 
 
-template <typename T, typename U = std::conditional_t<std::is_same_v<T, float>, nanovdb::FloatTree, nanovdb::Vec3fTree>>
-__global__ void set_grid_values(const CudaResources<T, true> ressources, const size_t npoints, nanovdb::Grid<U>* __restrict__ d_grid) {
+template <typename T, typename U = std::conditional_t<std::is_same_v<T, float>, nanovdb::FloatTree, nanovdb::Vec3fTree>,
+          bool HasTemp = true>
+__global__ void set_grid_values(const CudaResources<T, HasTemp> ressources, const size_t npoints, nanovdb::Grid<U>* __restrict__ d_grid) {
 	auto accessor = d_grid->tree().getAccessor();
 
 	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;

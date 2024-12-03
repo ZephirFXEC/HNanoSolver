@@ -63,9 +63,6 @@ void advect_points_to_grid_f(HNS::OpenFloatGrid& in_data, const nanovdb::Vec3fGr
                              const float voxelSize, const float dt, const cudaStream_t& stream) {
 	const size_t npoints = in_data.size;
 
-	cudaCheck(cudaHostRegister(in_data.pCoords(), npoints * sizeof(openvdb::Coord), cudaHostRegisterDefault));
-	cudaCheck(cudaHostRegister(in_data.pValues(), npoints * sizeof(float), cudaHostRegisterDefault));
-
 	CudaResources<float, true> resources(npoints, stream);
 
 	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> handle;
@@ -96,10 +93,6 @@ void advect_points_to_grid_f(HNS::OpenFloatGrid& in_data, const nanovdb::Vec3fGr
 void advect_points_to_grid_v(HNS::OpenVectorGrid& in_data, HNS::NanoVectorGrid& out_data, const float voxelSize, const float dt,
                              const cudaStream_t& stream) {
 	const size_t npoints = in_data.size;
-
-	cudaCheck(cudaHostRegister(in_data.pCoords(), npoints * sizeof(openvdb::Coord), cudaHostRegisterDefault));
-	cudaCheck(cudaHostRegister(in_data.pValues(), npoints * sizeof(openvdb::Vec3f), cudaHostRegisterDefault));
-
 	CudaResources<nanovdb::Vec3f, true> resources(npoints, stream);
 
 	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> handle;
