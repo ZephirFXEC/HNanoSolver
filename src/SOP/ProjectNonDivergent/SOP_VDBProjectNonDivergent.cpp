@@ -7,14 +7,11 @@
 
 #include <UT/UT_DSOVersion.h>
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/CreateNanoGrid.h>
-#include <nanovdb/util/GridBuilder.h>
 
 #include <Utils/OpenToNano.hpp>
 #include <Utils/ScopedTimer.hpp>
 #include <Utils/Utils.hpp>
 
-#include "MultigridSolver.hpp"
 
 const char* const SOP_HNanoVDBProjectNonDivergentVerb::theDsFile = R"THEDSFILE(
 {
@@ -90,24 +87,23 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 		}
 	}
 
-	HNS::NanoFloatGrid out_data;
+
+	HNS::OpenVectorGrid out_data{};
 	{
-		ScopedTimer timer("Computing Divergence");
-
-		ComputeDivergence(sopcache->pHandle, open_out_data, out_data, stream);
+		ScopedTimer timer("Computing Pressure Projection");
+		PressureProjection(sopcache->pHandle, open_out_data, out_data, stream);
 	}
-
 
 	{
 		ScopedTimer timer("Building Divergence Grid");
 
-		const openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create();
+		const openvdb::Vec3fGrid::Ptr out = openvdb::Vec3fGrid::create();
 		out->setGridClass(openvdb::GRID_FOG_VOLUME);
 		out->setTransform(openvdb::math::Transform::createLinearTransform(in_velocity->voxelSize()[0]));
 
 		detail->clearAndDestroy();
 
-		openvdb::tree::ValueAccessor<openvdb::FloatTree, false> accessor(out->tree());
+		openvdb::tree::ValueAccessor<openvdb::VectorTree, false> accessor(out->tree());
 
 		for (size_t i = 0; i < out_data.size; ++i) {
 			auto& coord = out_data.pCoords()[i];
@@ -115,7 +111,7 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 			accessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
 		}
 
-		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, "divergence");
+		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, "vel");
 	}
 
 	cudaStreamDestroy(stream);
