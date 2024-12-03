@@ -1,9 +1,10 @@
 # HNanoSolver
 > This is a project used to learn Fluid Dynamics and GPU acceleration through Cuda.
-- **HNanoProjectNonDivergent**, Compute a Divergence free velocity field on the GPU
-- **HNanoAdvect**, advect any float fields on the GPU
-- **HNanoAdvectVelocity**, advect any vector field on the GPU
-- **HNanoFromGrid**, generate a VDB from points on the GPU
+- **HNanoSolver**, All in one node computing a quantity advection by a divergence free velocity field on the GPU.
+- **HNanoProjectNonDivergent**, Compute a Divergence free velocity field on the GPU.
+- **HNanoAdvect**, Advect any float fields on the GPU.
+- **HNanoAdvectVelocity**, Advect any vector field on the GPU.
+- **HNanoFromGrid**, Generate a VDB from points on the GPU.
 - **HNanoViewer**, Standalone app to visualize VDBs and kernels without having to relaunch Houdini. 
 
 # HNanoViewer : 
