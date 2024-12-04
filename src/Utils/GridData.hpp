@@ -5,61 +5,86 @@
 
 #include <cuda_runtime.h>
 #include <nanovdb/NanoVDB.h>
-#include <openvdb/openvdb.h>
+#include <openvdb/Types.h>
 
+#include <iostream>
 #include <memory>
-#include <stdexcept>
+#include <type_traits>
+
+
 namespace HNS {
 
 enum class AllocationType { Standard, Aligned, CudaPinned };
 
 template <typename T>
 struct MemoryBlock {
-	std::unique_ptr<T[]> ptr{nullptr};
-	AllocationType allocType = AllocationType::Standard;
+	struct Deleter {
+		AllocationType allocType = AllocationType::Standard;
+
+		void operator()(T* ptr) {
+			switch (allocType) {
+				case AllocationType::Standard:
+					delete[] ptr;
+					break;
+				case AllocationType::Aligned:
+					_aligned_free(ptr);
+					break;
+				case AllocationType::CudaPinned:
+					cudaFreeHost(ptr);
+					break;
+				default:
+					break;
+			}
+		}
+	};
+
+	std::unique_ptr<T[], Deleter> ptr{nullptr, Deleter{AllocationType::Standard}};
 	size_t size = 0;
 
 	MemoryBlock() = default;
 
-	void allocateCudaPinned(const size_t numElements) {
+	bool allocateCudaPinned(const size_t numElements) {
 		clear();
-		void* temp;
-		if (cudaMallocHost(&temp, numElements * sizeof(T)) != cudaSuccess) {
-			throw std::runtime_error("Failed to allocate pinned memory");
+		void* temp = nullptr;
+		if (const cudaError_t err = cudaMallocHost(&temp, numElements * sizeof(T)); err != cudaSuccess) {
+			std::cerr << "Error allocating pinned memory: " << cudaGetErrorString(err) << std::endl;
+			return false;
 		}
 		ptr.reset(static_cast<T*>(temp));
-		allocType = AllocationType::CudaPinned;
+		ptr.get_deleter().allocType = AllocationType::CudaPinned;
 		size = numElements;
+		return true;
 	}
 
-	void allocateStandard(const size_t numElements) {
+	bool allocateStandard(const size_t numElements) {
 		clear();
-		ptr.reset(new T[numElements]);
-		allocType = AllocationType::Standard;
-		size = numElements;
+		try {
+			ptr.reset(new T[numElements]);
+			ptr.get_deleter().allocType = AllocationType::Standard;
+			size = numElements;
+			return true;
+		} catch (const std::bad_alloc&) {
+			std::cerr << "Error allocating standard memory" << std::endl;
+			return false;
+		}
 	}
 
-	void allocateAligned(const size_t numElements) {
+	bool allocateAligned(const size_t numElements) {
 		clear();
-		ptr.reset(static_cast<T*>(_aligned_malloc(numElements * sizeof(T), 64)));
-		allocType = AllocationType::Aligned;
+		T* temp = static_cast<T*>(_aligned_malloc(numElements * sizeof(T), 64));
+		if (!temp) {
+			std::cerr << "Error allocating aligned memory" << std::endl;
+			return false;
+		}
+		ptr.reset(temp);
+		ptr.get_deleter().allocType = AllocationType::Aligned;
 		size = numElements;
+		return true;
 	}
 
 	void clear() {
-		switch (allocType) {
-			case AllocationType::Standard:
-				ptr.reset();
-				break;
-			case AllocationType::Aligned:
-				_aligned_free(ptr.get());
-				break;
-			case AllocationType::CudaPinned:
-				cudaFreeHost(ptr.get());
-				break;
-			default:
-				break;
-		}
+		ptr.reset();
+		size = 0;
 	}
 };
 
@@ -67,23 +92,46 @@ template <typename CoordT, typename ValueT>
 struct GridData {
 	GridData() = default;
 
-	// Simplified allocation functions
-	void allocateCudaPinned(size_t numElements) {
-		coordsBlock.allocateCudaPinned(numElements);
-		valuesBlock.allocateCudaPinned(numElements);
+	bool allocateCudaPinned(size_t numElements) {
+		if (!coordsBlock.allocateCudaPinned(numElements)) {
+			std::cerr << "Failed to allocate coordinates block" << std::endl;
+			return false;
+		}
+		if (!valuesBlock.allocateCudaPinned(numElements)) {
+			std::cerr << "Failed to allocate values block" << std::endl;
+			coordsBlock.clear();
+			return false;
+		}
 		size = numElements;
+		return true;
 	}
 
-	void allocateStandard(size_t numElements) {
-		coordsBlock.allocateStandard(numElements);
-		valuesBlock.allocateStandard(numElements);
+	bool allocateStandard(size_t numElements) {
+		if (!coordsBlock.allocateStandard(numElements)) {
+			std::cerr << "Failed to allocate coordinates block" << std::endl;
+			return false;
+		}
+		if (!valuesBlock.allocateStandard(numElements)) {
+			std::cerr << "Failed to allocate values block" << std::endl;
+			coordsBlock.clear();
+			return false;
+		}
 		size = numElements;
+		return true;
 	}
 
-	void allocateAligned(size_t numElements) {
-		coordsBlock.allocateAligned(numElements);
-		valuesBlock.allocateAligned(numElements);
+	bool allocateAligned(size_t numElements) {
+		if (!coordsBlock.allocateAligned(numElements)) {
+			std::cerr << "Failed to allocate coordinates block" << std::endl;
+			return false;
+		}
+		if (!valuesBlock.allocateAligned(numElements)) {
+			std::cerr << "Failed to allocate values block" << std::endl;
+			coordsBlock.clear();
+			return false;
+		}
 		size = numElements;
+		return true;
 	}
 
 	void clear() {

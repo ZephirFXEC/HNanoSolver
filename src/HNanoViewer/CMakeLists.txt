@@ -17,4 +17,6 @@ target_link_libraries(HNanoViewer PRIVATE
         glfw
         imgui::imgui
         Utils
-        Kernels)
+        Kernels
+        Houdini
+        "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib")

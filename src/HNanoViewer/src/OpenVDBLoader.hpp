@@ -10,19 +10,21 @@
 #include <glm/glm.hpp>
 #include <string>
 
+#include "Utils/GridData.hpp"
+
 class OpenVDBLoader {
    public:
 	OpenVDBLoader();
 	~OpenVDBLoader();
 
-	// Load VDB file and extract voxel positions
-	static bool loadVDBToTexture(const std::string& filename, GLuint& volumeTexture, glm::vec3& volumeDimensions);
+	[[nodiscard]] auto getGridBase() const { return pBaseGrid; }
+
+	bool loadVDB(const std::string& filename);
+	bool VDBToTexture(GLuint& volumeTexture, const HNS::NanoFloatGrid & in_data) const;
 
    private:
-	// Initialize OpenVDB library (called in constructor)
 	static void initialize();
-
-	// Shutdown OpenVDB library (called in destructor)
 	static void shutdown();
 
+	openvdb::GridBase::Ptr pBaseGrid = nullptr;
 };

@@ -4,19 +4,25 @@
 #include "OpenVDBLoader.hpp"
 
 #include <GLFW/glfw3.h>
-
-
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+
 
 // Include GLM
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#define NANOVDB_USE_OPENVDB
 // Include project headers
+#include <nanovdb/util/CreateNanoGrid.h>
+#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
+
 #include "Renderer.hpp"
 #include "Shader.hpp"
+#include "Utils/OpenToNano.hpp"
+
+extern "C" void pointToGridFloat(HNS::OpenFloatGrid& in_data, float voxelSize, HNS::NanoFloatGrid& out_data, const cudaStream_t& stream);
 
 // Callback function for window resizing
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
@@ -130,7 +136,7 @@ int main() {
 	glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
 	// Load OpenGL function pointers using GLAD
-	if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+	if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
 		std::cerr << "Failed to initialize GLAD\n";
 		return -1;
 	}
@@ -156,7 +162,6 @@ int main() {
 
 	// Volume data
 	GLuint volumeTexture;
-	glm::vec3 volumeDimensions;
 	bool vdbLoaded = false;
 
 
@@ -166,58 +171,22 @@ int main() {
 
 	// Shader
 	const Shader shader("C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/vertex_shader.vert",
-	              "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/fragment_shader.frag");
+	                    "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/fragment_shader.frag");
 
 
 	// Performance metrics
 	float frameTime = 0.0f;
 	float fps = 0.0f;
-	float loadingTime = 0.0f;
 
 	// Cube vertices (positions of a cube from -0.5 to 0.5 in all axes)
-	float cubeVertices[] = {
-		// Positions
-		-0.5f, -0.5f, -0.5f,
-		 0.5f, -0.5f, -0.5f,
-		 0.5f,  0.5f, -0.5f,
-		 0.5f,  0.5f, -0.5f,
-		-0.5f,  0.5f, -0.5f,
-		-0.5f, -0.5f, -0.5f,
-
-		-0.5f, -0.5f,  0.5f,
-		 0.5f, -0.5f,  0.5f,
-		 0.5f,  0.5f,  0.5f,
-		 0.5f,  0.5f,  0.5f,
-		-0.5f,  0.5f,  0.5f,
-		-0.5f, -0.5f,  0.5f,
-
-		-0.5f,  0.5f,  0.5f,
-		-0.5f,  0.5f, -0.5f,
-		-0.5f, -0.5f, -0.5f,
-		-0.5f, -0.5f, -0.5f,
-		-0.5f, -0.5f,  0.5f,
-		-0.5f,  0.5f,  0.5f,
-
-		 0.5f,  0.5f,  0.5f,
-		 0.5f,  0.5f, -0.5f,
-		 0.5f, -0.5f, -0.5f,
-		 0.5f, -0.5f, -0.5f,
-		 0.5f, -0.5f,  0.5f,
-		 0.5f,  0.5f,  0.5f,
-
-		-0.5f, -0.5f, -0.5f,
-		 0.5f, -0.5f, -0.5f,
-		 0.5f, -0.5f,  0.5f,
-		 0.5f, -0.5f,  0.5f,
-		-0.5f, -0.5f,  0.5f,
-		-0.5f, -0.5f, -0.5f,
-
-		-0.5f,  0.5f, -0.5f,
-		 0.5f,  0.5f, -0.5f,
-		 0.5f,  0.5f,  0.5f,
-		 0.5f,  0.5f,  0.5f,
-		-0.5f,  0.5f,  0.5f,
-		-0.5f,  0.5f, -0.5f,
+	constexpr float cubeVertices[] = {
+	    // Positions
+	    -0.5f, -0.5f, -0.5f, 0.5f,  -0.5f, -0.5f, 0.5f,  0.5f,  -0.5f, 0.5f,  0.5f,  -0.5f, -0.5f, 0.5f,  -0.5f, -0.5f, -0.5f, -0.5f,
+	    -0.5f, -0.5f, 0.5f,  0.5f,  -0.5f, 0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  -0.5f, 0.5f,  0.5f,  -0.5f, -0.5f, 0.5f,
+	    -0.5f, 0.5f,  0.5f,  -0.5f, 0.5f,  -0.5f, -0.5f, -0.5f, -0.5f, -0.5f, -0.5f, -0.5f, -0.5f, -0.5f, 0.5f,  -0.5f, 0.5f,  0.5f,
+	    0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  -0.5f, 0.5f,  -0.5f, -0.5f, 0.5f,  -0.5f, -0.5f, 0.5f,  -0.5f, 0.5f,  0.5f,  0.5f,  0.5f,
+	    -0.5f, -0.5f, -0.5f, 0.5f,  -0.5f, -0.5f, 0.5f,  -0.5f, 0.5f,  0.5f,  -0.5f, 0.5f,  -0.5f, -0.5f, 0.5f,  -0.5f, -0.5f, -0.5f,
+	    -0.5f, 0.5f,  -0.5f, 0.5f,  0.5f,  -0.5f, 0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  -0.5f, 0.5f,  0.5f,  -0.5f, 0.5f,  -0.5f,
 	};
 
 	unsigned int cubeVAO, cubeVBO;
@@ -230,14 +199,20 @@ int main() {
 	glBufferData(GL_ARRAY_BUFFER, sizeof(cubeVertices), cubeVertices, GL_STATIC_DRAW);
 
 	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
 
 	glBindVertexArray(0);
+
+	float loadVDBTime = 0.0f;
+	float gridDataTime = 0.0f;
+	float advectionStepTime = 0.0f;
+	float VDBToTextureTime = 0.0f;
+	float totalLoadingTime = 0.0f;
 
 
 	// Main loop
 	while (!glfwWindowShouldClose(window)) {
-		const float currentFrame = (float)glfwGetTime();
+		const auto currentFrame = static_cast<float>(glfwGetTime());
 		deltaTime = currentFrame - lastFrame;
 		lastFrame = currentFrame;
 
@@ -262,29 +237,77 @@ int main() {
 			ImGui::Text("FPS: %.1f", fps);
 
 			// Loading performance
-			if (loadingTime > 0.0f) ImGui::Text("VDB Loading Time: %.3f ms", loadingTime);
+			if (totalLoadingTime > 0.0f) {
+				ImGui::Separator();
+				ImGui::Text("Loading Times:");
+				ImGui::Text("  Total Loading Time: %.3f ms", totalLoadingTime);
+				ImGui::Text("  Load VDB Time: %.3f ms", loadVDBTime);
+				ImGui::Text("  Grid Data Time: %.3f ms", gridDataTime);
+				ImGui::Text("  Advection Step Time: %.3f ms", advectionStepTime);
+				ImGui::Text("  VDBToTexture Time: %.3f ms", VDBToTextureTime);
+			}
 
 			ImGui::Separator();
 
-			// Existing VDB Viewer controls
-			ImGui::Text("OpenVDB Viewer");
-
-			if (ImGui::Button("Load VDB File"))
-			{
-				// Start timer
+			if (ImGui::Button("Load VDB File")) {
+				// Measure loadVDB time
 				auto startTime = std::chrono::high_resolution_clock::now();
-
-				vdbLoaded = vdbLoader.loadVDBToTexture(vdbFilename, volumeTexture, volumeDimensions);
-
-				// End timer
+				vdbLoader.loadVDB(vdbFilename);
 				auto endTime = std::chrono::high_resolution_clock::now();
-				std::chrono::duration<float> duration = endTime - startTime;
-				loadingTime = duration.count() * 1000.0f; // Convert to milliseconds
+				loadVDBTime = std::chrono::duration<float, std::milli>(endTime - startTime).count();
+
+				cudaFree(0);
 			}
 
-			ImGui::Text("VDB File: %s", vdbFilename.c_str());
-			ImGui::End();
+			// try to ditch the cold start of the first cuda call
+
+			if (ImGui::Button("Run Kernels")) {
+
+				openvdb::GridBase::Ptr pBaseGrid = vdbLoader.getGridBase();
+				if (!pBaseGrid) {
+					std::cerr << "Error: Grid is not loaded." << std::endl;
+					continue;
+				}
+				openvdb::FloatGrid::Ptr grid = openvdb::gridPtrCast<openvdb::FloatGrid>(pBaseGrid);
+
+				auto totalStartTime = std::chrono::high_resolution_clock::now();
+
+				std::chrono::time_point<std::chrono::steady_clock> startTime;
+				std::chrono::time_point<std::chrono::steady_clock> endTime;
+
+
+				HNS::OpenFloatGrid gridData;
+				{
+					startTime = std::chrono::high_resolution_clock::now();
+					HNS::extractFromOpenVDB<openvdb::FloatGrid, float>(grid, gridData);
+					endTime = std::chrono::high_resolution_clock::now();
+					gridDataTime = std::chrono::duration<float, std::milli>(endTime - startTime).count();
+				}
+
+				// Measure Advection Step time
+				HNS::NanoFloatGrid nanoGridData;
+				{
+					startTime = std::chrono::high_resolution_clock::now();
+					pointToGridFloat(gridData, grid->voxelSize()[0], nanoGridData, nullptr);
+					endTime = std::chrono::high_resolution_clock::now();
+					advectionStepTime = std::chrono::duration<float, std::milli>(endTime - startTime).count();
+				}
+
+
+				// Measure VDBToTexture time
+				startTime = std::chrono::high_resolution_clock::now();
+				vdbLoaded = vdbLoader.VDBToTexture(volumeTexture, nanoGridData);
+				endTime = std::chrono::high_resolution_clock::now();
+				VDBToTextureTime = std::chrono::duration<float, std::milli>(endTime - startTime).count();
+
+				// End total timer
+				auto totalEndTime = std::chrono::high_resolution_clock::now();
+				totalLoadingTime = std::chrono::duration<float, std::milli>(totalEndTime - totalStartTime).count();
+			}
 		}
+
+		ImGui::Text("VDB File: %s", vdbFilename.c_str());
+		ImGui::End();
 
 		// Rendering
 		ImGui::Render();
@@ -299,8 +322,7 @@ int main() {
 
 		// Render voxels if loaded
 		// Render volume if loaded
-		if (vdbLoaded)
-		{
+		if (vdbLoaded) {
 			glEnable(GL_DEPTH_TEST);
 			glEnable(GL_BLEND);
 			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
