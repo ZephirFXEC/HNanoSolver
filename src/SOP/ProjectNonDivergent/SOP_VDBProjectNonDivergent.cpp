@@ -104,10 +104,10 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 	}
 
 	{
-		ScopedTimer timer("Building Divergence Grid");
+		ScopedTimer timer("Building Velocity Grid");
 
 		const openvdb::Vec3fGrid::Ptr out = openvdb::Vec3fGrid::create();
-		out->setGridClass(openvdb::GRID_FOG_VOLUME);
+		out->setGridClass(openvdb::GRID_STAGGERED);
 		out->setTransform(openvdb::math::Transform::createLinearTransform(in_velocity->voxelSize()[0]));
 
 		detail->clearAndDestroy();
