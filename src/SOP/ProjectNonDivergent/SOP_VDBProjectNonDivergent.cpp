@@ -32,6 +32,13 @@ const char* const SOP_HNanoVDBProjectNonDivergentVerb::theDsFile = R"THEDSFILE(
         size    1
         default { "0.5" }
 	}
+	parm {
+		name "iterations"
+		label "Iterations"
+        type    integer
+        size    1
+        range   { 1! 100 }
+	}
 }
 )THEDSFILE";
 
@@ -58,6 +65,8 @@ const SOP_NodeVerb* SOP_HNanoVDBProjectNonDivergent::cookVerb() const { return S
 void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const {
 	openvdb_houdini::HoudiniInterrupter boss("Computing VDB grids");
 	auto sopcache = reinterpret_cast<SOP_HNanoVDBProjectNonDivergentCache*>(cookparms.cache());
+	const auto& sopparms = cookparms.parms<SOP_VDBProjectNonDivergentParms>();
+
 	GU_Detail* detail = cookparms.gdh().gdpNC();
 	const GU_Detail* in_geo = cookparms.inputGeo(0);
 
@@ -91,7 +100,7 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 	HNS::OpenVectorGrid out_data{};
 	{
 		ScopedTimer timer("Computing Pressure Projection");
-		PressureProjection(sopcache->pHandle, open_out_data, out_data, stream);
+		PressureProjection(sopcache->pHandle, open_out_data, out_data, sopparms.getIterations(), stream);
 	}
 
 	{

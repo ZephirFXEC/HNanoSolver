@@ -27,7 +27,6 @@ void fillTopology(CudaResources<ValueOutT, HasTemp>& resources, InType* h_values
 
 	// Launch kernel to set grid values
 	set_grid_values<ValueOutT, TreeT, HasTemp><<<numBlocks, numThreads, 0, stream>>>(resources, npoints, grid);
-	cudaCheck(cudaGetLastError());
 }
 
 

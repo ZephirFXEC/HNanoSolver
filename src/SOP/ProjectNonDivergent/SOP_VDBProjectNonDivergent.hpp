@@ -78,4 +78,4 @@ extern "C" void pointToGridVectorToDevice(HNS::OpenVectorGrid& in_data, const fl
                                           nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream);
 
 extern "C" void PressureProjection(const nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& in_vel, HNS::OpenVectorGrid& in_data,
-                                   HNS::OpenVectorGrid& out_data, const cudaStream_t& stream);
+								   HNS::OpenVectorGrid& out_data, const size_t iteration, const cudaStream_t& stream);
