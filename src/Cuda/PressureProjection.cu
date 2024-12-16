@@ -13,30 +13,31 @@ __global__ void divergence(const nanovdb::Coord* __restrict__ d_coord, float* __
 
 	const auto velAccessor = vel->tree().getAccessor();
 	// Linear interpolation sampler
-	const auto velSampler = nanovdb::createSampler<1>(velAccessor);
+	//const auto velSampler = nanovdb::createSampler<1>(velAccessor);
 	const float dx = vel->voxelSize()[0];  // voxel spacing
 
 	const nanovdb::Coord coord = d_coord[tid];
-	const nanovdb::Vec3f c = coord.asVec3s();
+	//const nanovdb::Vec3f c = coord.asVec3s();
 
 	// Compute neighbor coordinates in short vector form
-	const nanovdb::Vec3f cxp1 = c + nanovdb::Vec3f(dx, 0.0f, 0.0f);
-	const nanovdb::Vec3f cxm1 = c + nanovdb::Vec3f(-dx, 0.0f, 0.0f);
-	const nanovdb::Vec3f cyp1 = c + nanovdb::Vec3f(0.0f, dx, 0.0f);
-	const nanovdb::Vec3f cym1 = c + nanovdb::Vec3f(0.0f, -dx, 0.0f);
-	const nanovdb::Vec3f czp1 = c + nanovdb::Vec3f(0.0f, 0.0f, dx);
-	const nanovdb::Vec3f czm1 = c + nanovdb::Vec3f(0.0f, 0.0f, -dx);
+	const nanovdb::Coord cxp1 = coord + nanovdb::Coord(1, 0, 0);
+	const nanovdb::Coord cxm1 = coord - nanovdb::Coord(1, 0, 0);
+	const nanovdb::Coord cyp1 = coord + nanovdb::Coord(0, 1, 0);
+	const nanovdb::Coord cym1 = coord - nanovdb::Coord(0, 1, 0);
+	const nanovdb::Coord czp1 = coord + nanovdb::Coord(0, 0, 1);
+	const nanovdb::Coord czm1 = coord - nanovdb::Coord(0, 0, 1);
 
-	const nanovdb::Vec3f vel_xm1 = velSampler(cxm1);
-	const nanovdb::Vec3f vel_xp1 = velSampler(cxp1);
-	const nanovdb::Vec3f vel_ym1 = velSampler(cym1);
-	const nanovdb::Vec3f vel_yp1 = velSampler(cyp1);
-	const nanovdb::Vec3f vel_zm1 = velSampler(czm1);
-	const nanovdb::Vec3f vel_zp1 = velSampler(czp1);
+	const nanovdb::Vec3f vel_xm1 = velAccessor.getValue(cxm1);
+	const nanovdb::Vec3f vel_xp1 = velAccessor.getValue(cxp1);
+	const nanovdb::Vec3f vel_ym1 = velAccessor.getValue(cym1);
+	const nanovdb::Vec3f vel_yp1 = velAccessor.getValue(cyp1);
+	const nanovdb::Vec3f vel_zm1 = velAccessor.getValue(czm1);
+	const nanovdb::Vec3f vel_zp1 = velAccessor.getValue(czp1);
 
-	const float divX = (vel_xp1[0] - vel_xm1[0]) / dx;
-	const float divY = (vel_yp1[1] - vel_ym1[1]) / dx;
-	const float divZ = (vel_zp1[2] - vel_zm1[2]) / dx;
+	// Use central differencing: (f(i+1)-f(i-1)) / (2*dx)
+	const float divX = (vel_xp1[0] - vel_xm1[0]) / (2.0f * dx);
+	const float divY = (vel_yp1[1] - vel_ym1[1]) / (2.0f * dx);
+	const float divZ = (vel_zp1[2] - vel_zm1[2]) / (2.0f * dx);
 
 	d_value[tid] = divX + divY + divZ;
 }
@@ -60,25 +61,26 @@ __global__ void pressureJacobiIteration(const nanovdb::Coord* __restrict__ d_coo
 	const float dx = pressureGrid->voxelSize()[0];
 
 	// Neighbor coords
-	const nanovdb::Vec3f cxp1 = c + nanovdb::Vec3f(dx, 0.0f, 0.0f);
-	const nanovdb::Vec3f cxm1 = c - nanovdb::Vec3f(dx, 0.0f, 0.0f);
-	const nanovdb::Vec3f cyp1 = c + nanovdb::Vec3f(0.0f, dx, 0.0f);
-	const nanovdb::Vec3f cym1 = c - nanovdb::Vec3f(0.0f, dx, 0.0f);
-	const nanovdb::Vec3f czp1 = c + nanovdb::Vec3f(0.0f, 0.0f, dx);
-	const nanovdb::Vec3f czm1 = c - nanovdb::Vec3f(0.0f, 0.0f, dx);
+	const nanovdb::Coord cxp1 = coord + nanovdb::Coord(1, 0, 0);
+	const nanovdb::Coord cxm1 = coord - nanovdb::Coord(1, 0, 0);
+	const nanovdb::Coord cyp1 = coord + nanovdb::Coord(0, 1, 0);
+	const nanovdb::Coord cym1 = coord - nanovdb::Coord(0, 1, 0);
+	const nanovdb::Coord czp1 = coord + nanovdb::Coord(0, 0, 1);
+	const nanovdb::Coord czm1 = coord - nanovdb::Coord(0, 0, 1);
 
 	// Neighboring pressures
-	const float p_xp1 = pressureSampler(cxp1);
-	const float p_xm1 = pressureSampler(cxm1);
-	const float p_yp1 = pressureSampler(cyp1);
-	const float p_ym1 = pressureSampler(cym1);
-	const float p_zp1 = pressureSampler(czp1);
-	const float p_zm1 = pressureSampler(czm1);
+	const float p_xp1 = pressureAccessor.getValue(cxp1);
+	const float p_xm1 = pressureAccessor.getValue(cxm1);
+	const float p_yp1 = pressureAccessor.getValue(cyp1);
+	const float p_ym1 = pressureAccessor.getValue(cym1);
+	const float p_zp1 = pressureAccessor.getValue(czp1);
+	const float p_zm1 = pressureAccessor.getValue(czm1);
 
 	// Divergence at coord
 	const float div = divergenceSampler(c);
 
 	// Jacobi iteration step
+	// (Sum of neighbors - div * dx^2) / 6
 	const float p_new = (p_xp1 + p_xm1 + p_yp1 + p_ym1 + p_zp1 + p_zm1 - div * dx * dx) / 6.0f;
 
 	// Write the new pressure value
@@ -96,11 +98,14 @@ __global__ void subtractPressureGradient(const nanovdb::Coord* __restrict__ d_co
 
 	const nanovdb::Coord coord = d_coords[tid];
 
-	const nanovdb::Vec3f grad = pressureSampler.gradient<>(coord.asVec3s());
+	nanovdb::Vec3f grad = pressureSampler.gradient<>(coord.asVec3s());
 
-	// Update velocity
+	// Convert gradient from "per index" to "per world unit" by dividing by dx
+	const float dx = voxelSize;
+	grad *= (1.0f / dx);
+
 	nanovdb::Vec3f v = velSampler(coord);
-	v -= grad;  //* (1.0f / voxelSize);
+	v -= grad; // Stable fluids: u_new = u - ∇p  (if density=1 and dt=1 for simplicity)
 
 	out.d_values[tid] = v;
 }
