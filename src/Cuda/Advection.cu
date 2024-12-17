@@ -11,12 +11,12 @@
 template <typename T, typename U = std::conditional_t<std::is_same_v<T, float>, nanovdb::FloatTree, nanovdb::Vec3fTree>>
 __global__ void advect(const CudaResources<T, true> resources, const size_t npoints, const float dt, const float voxelSize,
                        const nanovdb::Vec3fGrid* __restrict__ vel_grid, const nanovdb::Grid<U>* __restrict__ d_grid) {
-	// Precompute constants
-	const float inv_voxelSize = 1.0f / voxelSize;
-	const float scaled_dt = dt * inv_voxelSize;
 
 	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 	if (tid >= npoints) return;
+
+	const float inv_voxelSize = 1.0f / voxelSize;
+	const float scaled_dt = dt * inv_voxelSize;
 
 	auto accessor = d_grid->tree().getAccessor();
 	const auto velAccessor = vel_grid->tree().getAccessor();
@@ -32,20 +32,19 @@ __global__ void advect(const CudaResources<T, true> resources, const size_t npoi
 
 	const nanovdb::Vec3f voxelCoordf = ijk.asVec3s();
 
-	// Forward step
-	const nanovdb::Vec3f velocity = velSampler(voxelCoordf);
+	// For MAC velocity sampling, use the helper function defined above
+	const nanovdb::Vec3f velocity = sampleMACVelocity(velSampler, voxelCoordf);
 	const nanovdb::Vec3f forward_pos = voxelCoordf - velocity * scaled_dt;
 	const T value_forward = valueSampler(forward_pos);
 
-	// Backward step
-	const nanovdb::Vec3f back_velocity = velSampler(forward_pos);
+	// Backward step for error correction
+	const nanovdb::Vec3f back_velocity = sampleMACVelocity(velSampler, forward_pos);
 	const nanovdb::Vec3f back_pos = voxelCoordf + back_velocity * scaled_dt;
 	const T value_backward = valueSampler(back_pos);
 
 	// Error estimation and correction
 	const T error = computeError(value, value_backward);
 	T value_corrected = value_forward + error;
-
 	const T max_correction = computeMaxCorrection(value_forward, value);
 	value_corrected = clampValue(value_corrected, value_forward - max_correction, value_forward + max_correction);
 
@@ -75,17 +74,9 @@ void advect_points_to_grid_f(HNS::OpenFloatGrid& in_data, const nanovdb::Vec3fGr
 	const nanovdb::FloatGrid* d_grid = handle.deviceGrid<float>();
 	advect<float><<<numBlocks, numThreads, 0, stream>>>(resources, npoints, dt, voxelSize, vel_grid, d_grid);
 
-	out_data.allocateStandard(npoints);
-
-	cudaCheck(cudaHostRegister(out_data.pCoords(), npoints * sizeof(nanovdb::Coord), cudaHostRegisterDefault));
-	cudaCheck(cudaHostRegister(out_data.pValues(), npoints * sizeof(float), cudaHostRegisterDefault));
+	out_data.allocateCudaPinned(npoints);
 
 	resources.UnloadPointData(out_data, stream);
-
-	cudaCheck(cudaHostUnregister(in_data.pCoords()));
-	cudaCheck(cudaHostUnregister(in_data.pValues()));
-	cudaCheck(cudaHostUnregister(out_data.pCoords()));
-	cudaCheck(cudaHostUnregister(out_data.pValues()));
 
 	resources.cleanup(stream);
 }
@@ -105,17 +96,9 @@ void advect_points_to_grid_v(HNS::OpenVectorGrid& in_data, HNS::NanoVectorGrid& 
 	const nanovdb::Vec3fGrid* d_grid = handle.deviceGrid<nanovdb::Vec3f>();
 	advect<nanovdb::Vec3f><<<numBlocks, numThreads, 0, stream>>>(resources, npoints, dt, voxelSize, d_grid, d_grid);
 
-	out_data.allocateStandard(npoints);
-
-	cudaCheck(cudaHostRegister(out_data.pCoords(), npoints * sizeof(nanovdb::Coord), cudaHostRegisterDefault));
-	cudaCheck(cudaHostRegister(out_data.pValues(), npoints * sizeof(nanovdb::Vec3f), cudaHostRegisterDefault));
+	out_data.allocateCudaPinned(npoints);
 
 	resources.UnloadPointData(out_data, stream);
-
-	cudaCheck(cudaHostUnregister(in_data.pCoords()));
-	cudaCheck(cudaHostUnregister(in_data.pValues()));
-	cudaCheck(cudaHostUnregister(out_data.pCoords()));
-	cudaCheck(cudaHostUnregister(out_data.pValues()));
 
 	resources.cleanup(stream);
 }

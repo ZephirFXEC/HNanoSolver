@@ -39,6 +39,12 @@ const char* const SOP_HNanoVDBProjectNonDivergentVerb::theDsFile = R"THEDSFILE(
         size    1
         range   { 1! 100 }
 	}
+    parm {
+        name    "outdiv"
+        label   "Output Divergence"
+        type    toggle
+        default { "0" }
+    }
 }
 )THEDSFILE";
 
@@ -98,12 +104,16 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 
 
 	HNS::OpenVectorGrid out_data{};
-	{
+	HNS::OpenFloatGrid divergence{};
+	if(!sopparms.getOutdiv()){
 		ScopedTimer timer("Computing Pressure Projection");
 		PressureProjection(sopcache->pHandle, open_out_data, out_data, sopparms.getIterations(), stream);
+	} else {
+		ScopedTimer timer("Computing Divergence");
+		Divergence(sopcache->pHandle, open_out_data, divergence, stream);
 	}
 
-	{
+	if(!sopparms.getOutdiv()) {
 		ScopedTimer timer("Building Velocity Grid");
 
 		const openvdb::Vec3fGrid::Ptr out = openvdb::Vec3fGrid::create();
@@ -121,6 +131,26 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 		}
 
 		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, "vel");
+	} else {
+		ScopedTimer timer("Building Divergence Grid");
+
+		openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create();
+		out->setGridClass(openvdb::GRID_FOG_VOLUME);
+		out->setTransform(openvdb::math::Transform::createLinearTransform(in_velocity->voxelSize()[0]));
+		out->setName("divergence");
+
+		detail->clearAndDestroy();
+
+		openvdb::tree::ValueAccessor<openvdb::FloatTree> valueAccessor(out->tree());
+
+		for (size_t i = 0; i < divergence.size; ++i) {
+			const auto& coord = divergence.pCoords()[i];
+			const auto& value = divergence.pValues()[i];
+			valueAccessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
+		}
+
+		// Build the GU_PrimVDB from the grid
+		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
 	}
 
 	cudaStreamDestroy(stream);
