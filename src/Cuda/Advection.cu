@@ -8,9 +8,8 @@
 #include "PointToGrid.cuh"
 
 
-template <typename T, typename U = std::conditional_t<std::is_same_v<T, float>, nanovdb::FloatTree, nanovdb::Vec3fTree>>
-__global__ void advect(const CudaResources<T, true> resources, const size_t npoints, const float dt, const float voxelSize,
-                       const nanovdb::Vec3fGrid* __restrict__ vel_grid, const nanovdb::Grid<U>* __restrict__ d_grid) {
+__global__ void advect(const CudaResources<float, true> resources, const size_t npoints, const float dt, const float voxelSize,
+                       const nanovdb::Vec3fGrid* __restrict__ vel_grid, const nanovdb::FloatGrid* __restrict__ d_grid) {
 
 	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 	if (tid >= npoints) return;
@@ -24,7 +23,7 @@ __global__ void advect(const CudaResources<T, true> resources, const size_t npoi
 	auto valueSampler = nanovdb::createSampler<1>(accessor);
 
 	const nanovdb::Coord ijk = resources.d_coords[tid];
-	const T value = resources.d_values[tid];
+	const float original = resources.d_values[tid];
 
 	if (!accessor.isActive(ijk)) {
 		return;
@@ -32,29 +31,78 @@ __global__ void advect(const CudaResources<T, true> resources, const size_t npoi
 
 	const nanovdb::Vec3f voxelCoordf = ijk.asVec3s();
 
-	// For MAC velocity sampling, use the helper function defined above
+	// -------------------------------------------
+	// Forward step (semi-Lagrangian):
+	// Trace backward in time to find donor cell.
+	// velocity at voxelCoordf (MAC-sampled)
 	const nanovdb::Vec3f velocity = sampleMACVelocity(velSampler, voxelCoordf);
 	const nanovdb::Vec3f forward_pos = voxelCoordf - velocity * scaled_dt;
-	const T value_forward = valueSampler(forward_pos);
+	const float value_forward = valueSampler(forward_pos);
 
-	// Backward step for error correction
+
+	// -------------------------------------------
+	// Backward step for BFECC:
+	// From the forward_pos, integrate forward dt again:
 	const nanovdb::Vec3f back_velocity = sampleMACVelocity(velSampler, forward_pos);
 	const nanovdb::Vec3f back_pos = voxelCoordf + back_velocity * scaled_dt;
-	const T value_backward = valueSampler(back_pos);
+	const float value_backward = valueSampler(back_pos);
 
 	// Error estimation and correction
-	const T error = computeError(value, value_backward);
-	T value_corrected = value_forward + error;
-	const T max_correction = computeMaxCorrection(value_forward, value);
+	const float error = computeError(original, value_backward);
+	float value_corrected = value_forward + error;
+	const float max_correction = computeMaxCorrection(value_forward, original);
 	value_corrected = clampValue(value_corrected, value_forward - max_correction, value_forward + max_correction);
-
-	constexpr float blend_factor = 0.8f;
-	T new_value = lerp(value_forward, value_corrected, blend_factor);
-
-	new_value = enforceNonNegative(new_value);
+	value_corrected = enforceNonNegative(value_corrected);
 
 	// Store the new value
-	resources.d_temp_values[tid] = new_value;
+	resources.d_temp_values[tid] = value_corrected;
+}
+
+__global__ void advect(const CudaResources<nanovdb::Vec3f, true> resources, const size_t npoints, const float dt, const float voxelSize,
+                       const nanovdb::Vec3fGrid* __restrict__ vel_grid, const nanovdb::Vec3fGrid* __restrict__ d_grid) {
+
+	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+	if (tid >= npoints) return;
+
+	const float inv_voxelSize = 1.0f / voxelSize;
+	const float scaled_dt = dt * inv_voxelSize;
+
+	const auto velAccessor = vel_grid->tree().getAccessor();
+	const auto velSampler = nanovdb::createSampler<1>(velAccessor);
+
+	const nanovdb::Coord ijk = resources.d_coords[tid];
+	const nanovdb::Vec3f original = resources.d_values[tid];
+
+	if (!velAccessor.isActive(ijk)) {
+		return;
+	}
+
+	const nanovdb::Vec3f voxelCoordf = ijk.asVec3s();
+
+	// -------------------------------------------
+	// Forward step (semi-Lagrangian):
+	// Trace backward in time to find donor cell.
+	// velocity at voxelCoordf (MAC-sampled)
+	const nanovdb::Vec3f velocity = sampleMACVelocity(velSampler, voxelCoordf);
+	const nanovdb::Vec3f forward_pos = voxelCoordf - velocity * scaled_dt;
+	const nanovdb::Vec3f value_forward = sampleMACVelocity(velSampler, forward_pos);
+
+
+	// -------------------------------------------
+	// Backward step for BFECC:
+	// From the forward_pos, integrate forward dt again:
+	const nanovdb::Vec3f back_velocity = sampleMACVelocity(velSampler, forward_pos);
+	const nanovdb::Vec3f back_pos = voxelCoordf + back_velocity * scaled_dt;
+	const nanovdb::Vec3f value_backward = sampleMACVelocity(velSampler, back_pos);
+
+	// Error estimation and correction
+	const nanovdb::Vec3f error = computeError(original, value_backward);
+	nanovdb::Vec3f value_corrected = value_forward + error;
+	const nanovdb::Vec3f max_correction = computeMaxCorrection(value_forward, original);
+	value_corrected = clampValue(value_corrected, value_forward - max_correction, value_forward + max_correction);
+
+	// Store the new value
+	resources.d_temp_values[tid] = value_corrected;
 }
 
 
@@ -72,7 +120,7 @@ void advect_points_to_grid_f(HNS::OpenFloatGrid& in_data, const nanovdb::Vec3fGr
 	const unsigned int numBlocks = blocksPerGrid(npoints, numThreads);
 
 	const nanovdb::FloatGrid* d_grid = handle.deviceGrid<float>();
-	advect<float><<<numBlocks, numThreads, 0, stream>>>(resources, npoints, dt, voxelSize, vel_grid, d_grid);
+	advect<<<numBlocks, numThreads, 0, stream>>>(resources, npoints, dt, voxelSize, vel_grid, d_grid);
 
 	out_data.allocateCudaPinned(npoints);
 
@@ -94,7 +142,7 @@ void advect_points_to_grid_v(HNS::OpenVectorGrid& in_data, HNS::NanoVectorGrid& 
 	const unsigned int numBlocks = blocksPerGrid(npoints, numThreads);
 
 	const nanovdb::Vec3fGrid* d_grid = handle.deviceGrid<nanovdb::Vec3f>();
-	advect<nanovdb::Vec3f><<<numBlocks, numThreads, 0, stream>>>(resources, npoints, dt, voxelSize, d_grid, d_grid);
+	advect<<<numBlocks, numThreads, 0, stream>>>(resources, npoints, dt, voxelSize, d_grid, d_grid);
 
 	out_data.allocateCudaPinned(npoints);
 

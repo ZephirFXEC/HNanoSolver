@@ -118,6 +118,7 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 
 		const openvdb::Vec3fGrid::Ptr out = openvdb::Vec3fGrid::create();
 		out->setGridClass(openvdb::GRID_STAGGERED);
+		out->setVectorType(openvdb::VEC_CONTRAVARIANT_RELATIVE);
 		out->setTransform(openvdb::math::Transform::createLinearTransform(in_velocity->voxelSize()[0]));
 
 		detail->clearAndDestroy();

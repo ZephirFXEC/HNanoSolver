@@ -1,14 +1,14 @@
 //
 // Created by zphrfx on 29/08/2024.
 //
-
-#ifndef SOP_READWRITETEST_HPP
-#define SOP_READWRITETEST_HPP
+#pragma once
 
 #include <PRM/PRM_TemplateBuilder.h>
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
 #include <nanovdb/NanoVDB.h>
+
+#include <Utils/GridData.hpp>
 
 #include "SOP_VDBFromGrid.proto.h"
 
@@ -22,9 +22,7 @@ class SOP_HNanoVDBFromGrid final : public SOP_Node {
 
 	static PRM_Template* buildTemplates();
 
-	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) {
-		return new SOP_HNanoVDBFromGrid(net, name, op);
-	}
+	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) { return new SOP_HNanoVDBFromGrid(net, name, op); }
 
 	OP_ERROR cookMySop(OP_Context& context) override { return cookMyselfAsVerb(context); }
 
@@ -63,5 +61,4 @@ class SOP_HNanoVDBFromGridVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
-
-#endif  // SOP_READWRITETEST_HPP
+extern "C" void pointToGridFloat(HNS::OpenFloatGrid& in_data, float voxelSize, HNS::NanoFloatGrid& out_data, const cudaStream_t& stream);

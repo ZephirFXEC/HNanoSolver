@@ -22,7 +22,7 @@ void Renderer::init() { setupCube(); }
 
 void Renderer::setupCube() {
 	// Cube vertices (36 vertices for 12 triangles)
-	float cubeVertices[] = {
+	constexpr float cubeVertices[] = {
 	    // positions
 	    -0.5f, -0.5f, -0.5f,  // Back face
 	    0.5f,  -0.5f, -0.5f, 0.5f,  0.5f,  -0.5f, 0.5f,  0.5f,  -0.5f, -0.5f, 0.5f,  -0.5f, -0.5f, -0.5f, -0.5f,

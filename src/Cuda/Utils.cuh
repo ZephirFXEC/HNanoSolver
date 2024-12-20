@@ -208,9 +208,9 @@ __global__ void get_grid_values(const CudaResources<T, true> ressources, const s
 }
 
 inline __device__ nanovdb::Vec3f sampleMACVelocity(
-	const decltype(nanovdb::createSampler<1>(std::declval<const decltype(std::declval<nanovdb::Vec3fGrid>().tree().getAccessor())>())) &velSampler,
-	const nanovdb::Vec3f &pos)
-{
+    const decltype(nanovdb::createSampler<1>(
+        std::declval<const decltype(std::declval<nanovdb::Vec3fGrid>().tree().getAccessor())>()))& velSampler,
+    const nanovdb::Vec3f& pos) {
 	const float u = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
 	const float v = velSampler(pos + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
 	const float w = velSampler(pos + nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];

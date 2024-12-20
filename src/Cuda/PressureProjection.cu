@@ -46,7 +46,7 @@ __global__ void pressureJacobiIteration(const nanovdb::Coord* __restrict__ d_coo
 
 	const auto pressureAccessor = pressureGrid->tree().getAccessor();
 	const auto divergenceAccessor = divergenceGrid->tree().getAccessor();
-	auto newPressureAccessor = newPressureGrid->tree().getAccessor();
+	const auto newPressureAccessor = newPressureGrid->tree().getAccessor();
 
 	const auto pressureSampler = nanovdb::createSampler<1>(pressureAccessor);
 	const auto divergenceSampler = nanovdb::createSampler<1>(divergenceAccessor);

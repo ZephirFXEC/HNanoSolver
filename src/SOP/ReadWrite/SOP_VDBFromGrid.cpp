@@ -18,17 +18,11 @@ export back value / coord to the CPU to build the grid.
 #include "SOP_VDBFromGrid.hpp"
 
 #include <UT/UT_DSOVersion.h>
-#include <UT/UT_Tracing.h>
 #include <cuda_runtime_api.h>
-#include <driver_types.h>
 
 #include "Utils/OpenToNano.hpp"
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
-
-extern "C" void pointToGridFloat(HNS::OpenFloatGrid& in_data, float voxelSize, HNS::NanoFloatGrid& out_data,
-                                 const cudaStream_t& stream);
-
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 {
@@ -116,8 +110,10 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 			valueAccessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
 		}
 
+		// Build the GU_PrimVDB from the grid
 		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
 	}
+
 
 	cudaStreamDestroy(stream);
 }

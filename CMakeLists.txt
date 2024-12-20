@@ -24,6 +24,7 @@ find_package(Houdini REQUIRED)
 # ------- End Houdini -----------
 
 houdini_generate_proto_headers( FILES
+        src/SOP/HNanoSolver/SOP_HNanoSolver.cpp
         src/SOP/Advection/SOP_VDBAdvect.cpp
         src/SOP/ReadWrite/SOP_VDBFromGrid.cpp
         src/SOP/VelocityAdvection/SOP_VDBAdvectVelocity.cpp
@@ -148,7 +149,7 @@ target_include_directories(SOP_VDBFromGrid PRIVATE
         $ENV{HFS}/toolkit/include
 )
 ########################################################################################################################
-#houdini_configure_target(SOP_HNanoSolver $ENV{DSO_Path})
+houdini_configure_target(SOP_HNanoSolver $ENV{DSO_Path})
 houdini_configure_target(SOP_VDBFromGrid $ENV{DSO_Path})
 houdini_configure_target(SOP_Advect $ENV{DSO_Path})
 houdini_configure_target(SOP_AdvectVelocity $ENV{DSO_Path})

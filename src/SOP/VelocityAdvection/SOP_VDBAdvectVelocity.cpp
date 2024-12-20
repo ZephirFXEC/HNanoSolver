@@ -64,6 +64,10 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 		err = cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
 	}
 
+	if(!AGrid) {
+		cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
+	}
+
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
 
