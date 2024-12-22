@@ -3,18 +3,16 @@
 //
 #pragma once
 
-#include <cuda_runtime.h>
 #include <nanovdb/NanoVDB.h>
 #include <openvdb/Types.h>
 
 #include <iostream>
-#include <memory>
-#include <type_traits>
+
 
 
 namespace HNS {
 
-enum class AllocationType { Standard, Aligned, CudaPinned };
+enum class AllocationType { Standard, Aligned };
 
 template <typename T>
 struct MemoryBlock {
@@ -27,10 +25,7 @@ struct MemoryBlock {
 					delete[] ptr;
 					break;
 				case AllocationType::Aligned:
-					_aligned_free(ptr);
-					break;
-				case AllocationType::CudaPinned:
-					cudaFreeHost(ptr);
+					free(ptr);
 					break;
 				default:
 					break;
@@ -42,19 +37,6 @@ struct MemoryBlock {
 	size_t size = 0;
 
 	MemoryBlock() = default;
-
-	bool allocateCudaPinned(const size_t numElements) {
-		clear();
-		void* temp = nullptr;
-		if (const cudaError_t err = cudaMallocHost(&temp, numElements * sizeof(T)); err != cudaSuccess) {
-			std::cerr << "Error allocating pinned memory: " << cudaGetErrorString(err) << std::endl;
-			return false;
-		}
-		ptr.reset(static_cast<T*>(temp));
-		ptr.get_deleter().allocType = AllocationType::CudaPinned;
-		size = numElements;
-		return true;
-	}
 
 	bool allocateStandard(const size_t numElements) {
 		clear();
@@ -71,7 +53,7 @@ struct MemoryBlock {
 
 	bool allocateAligned(const size_t numElements) {
 		clear();
-		T* temp = static_cast<T*>(_aligned_malloc(numElements * sizeof(T), 64));
+		T* temp = static_cast<T*>(aligned_alloc(numElements * sizeof(T), 64));
 		if (!temp) {
 			std::cerr << "Error allocating aligned memory" << std::endl;
 			return false;
@@ -91,20 +73,6 @@ struct MemoryBlock {
 template <typename CoordT, typename ValueT>
 struct GridData {
 	GridData() = default;
-
-	bool allocateCudaPinned(size_t numElements) {
-		if (!coordsBlock.allocateCudaPinned(numElements)) {
-			std::cerr << "Failed to allocate coordinates block" << std::endl;
-			return false;
-		}
-		if (!valuesBlock.allocateCudaPinned(numElements)) {
-			std::cerr << "Failed to allocate values block" << std::endl;
-			coordsBlock.clear();
-			return false;
-		}
-		size = numElements;
-		return true;
-	}
 
 	bool allocateStandard(size_t numElements) {
 		if (!coordsBlock.allocateStandard(numElements)) {

@@ -69,7 +69,7 @@ void extractFromOpenVDB(const typename GridT::ConstPtr& grid, OpenGrid<ValueT>& 
 	    std::plus<size_t>());
 
 	// Allocate output arrays with pinned memory
-	out_data.allocateCudaPinned(totalVoxels);
+	out_data.allocateStandard(totalVoxels);
 
 	// Process leaves in parallel to extract voxel data
 	tbb::parallel_for(tbb::blocked_range<size_t>(0, numLeaves), [&](const tbb::blocked_range<size_t>& range) {

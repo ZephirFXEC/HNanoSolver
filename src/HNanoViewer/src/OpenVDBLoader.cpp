@@ -41,7 +41,7 @@ bool OpenVDBLoader::loadVDB(const std::string& filename) {
 	return true;
 }
 
-bool OpenVDBLoader::VDBToTexture(GLuint& volumeTexture, const HNS::NanoFloatGrid & in_data) const {
+bool OpenVDBLoader::VDBToTexture(GLuint& volumeTexture, const HNS::OpenFloatGrid& in_data) const {
 	// Determine volume bounds and dimensions
 	const openvdb::FloatGrid::ConstPtr grid = openvdb::gridConstPtrCast<openvdb::FloatGrid>(pBaseGrid);
 
@@ -59,7 +59,7 @@ bool OpenVDBLoader::VDBToTexture(GLuint& volumeTexture, const HNS::NanoFloatGrid
 
 	// Use direct iteration over coordinates with pre-computed index calculation
 	for (size_t i = 0; i < in_data.size; ++i) {
-		const nanovdb::Coord& coord = in_data.pCoords()[i];
+		const auto& coord = in_data.pCoords()[i];
 		const int x = coord.x() - minCoord.x();
 		const int y = coord.y() - minCoord.y();
 		const int z = coord.z() - minCoord.z();

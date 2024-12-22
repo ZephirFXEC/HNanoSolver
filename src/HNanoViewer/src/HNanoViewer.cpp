@@ -13,16 +13,10 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#define NANOVDB_USE_OPENVDB
-// Include project headers
-#include <nanovdb/util/CreateNanoGrid.h>
-#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
-
 #include "Renderer.hpp"
 #include "Shader.hpp"
 #include "Utils/OpenToNano.hpp"
 
-extern "C" void pointToGridFloat(HNS::OpenFloatGrid& in_data, float voxelSize, HNS::NanoFloatGrid& out_data, const cudaStream_t& stream);
 
 // Callback function for window resizing
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
@@ -154,11 +148,11 @@ int main() {
 
 	// Setup Platform/Renderer bindings
 	ImGui_ImplGlfw_InitForOpenGL(window, true);
-	ImGui_ImplOpenGL3_Init("#version 460 core");
+	ImGui_ImplOpenGL3_Init("#version 330 core");
 
 	// Initialize OpenVDB Loader
 	OpenVDBLoader vdbLoader;
-	const std::string vdbFilename = "C:/Users/zphrfx/Desktop/bunny_cloud.vdb";
+	const std::string vdbFilename = "/Users/ecrema/Downloads/smoke.vdb";
 
 	// Volume data
 	GLuint volumeTexture;
@@ -170,8 +164,8 @@ int main() {
 	renderer.init();
 
 	// Shader
-	const Shader shader("C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/vertex_shader.vert",
-	                    "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/fragment_shader.frag");
+	const Shader shader("../../../src/HNanoViewer/shaders/vertex_shader.vert",
+	                    "../../../src/HNanoViewer/shaders/fragment_shader.frag");
 
 
 	// Performance metrics
@@ -255,12 +249,9 @@ int main() {
 				vdbLoader.loadVDB(vdbFilename);
 				auto endTime = std::chrono::high_resolution_clock::now();
 				loadVDBTime = std::chrono::duration<float, std::milli>(endTime - startTime).count();
-
-				cudaFree(0);
 			}
 
 			// try to ditch the cold start of the first cuda call
-
 			if (ImGui::Button("Run Kernels")) {
 
 				openvdb::GridBase::Ptr pBaseGrid = vdbLoader.getGridBase();
@@ -275,7 +266,6 @@ int main() {
 				std::chrono::time_point<std::chrono::steady_clock> startTime;
 				std::chrono::time_point<std::chrono::steady_clock> endTime;
 
-
 				HNS::OpenFloatGrid gridData;
 				{
 					startTime = std::chrono::high_resolution_clock::now();
@@ -284,19 +274,9 @@ int main() {
 					gridDataTime = std::chrono::duration<float, std::milli>(endTime - startTime).count();
 				}
 
-				// Measure Advection Step time
-				HNS::NanoFloatGrid nanoGridData;
-				{
-					startTime = std::chrono::high_resolution_clock::now();
-					pointToGridFloat(gridData, grid->voxelSize()[0], nanoGridData, nullptr);
-					endTime = std::chrono::high_resolution_clock::now();
-					advectionStepTime = std::chrono::duration<float, std::milli>(endTime - startTime).count();
-				}
-
-
 				// Measure VDBToTexture time
 				startTime = std::chrono::high_resolution_clock::now();
-				vdbLoaded = vdbLoader.VDBToTexture(volumeTexture, nanoGridData);
+				vdbLoaded = vdbLoader.VDBToTexture(volumeTexture, gridData);
 				endTime = std::chrono::high_resolution_clock::now();
 				VDBToTextureTime = std::chrono::duration<float, std::milli>(endTime - startTime).count();
 

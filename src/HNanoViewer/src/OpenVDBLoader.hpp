@@ -20,7 +20,7 @@ class OpenVDBLoader {
 	[[nodiscard]] auto getGridBase() const { return pBaseGrid; }
 
 	bool loadVDB(const std::string& filename);
-	bool VDBToTexture(GLuint& volumeTexture, const HNS::NanoFloatGrid & in_data) const;
+	bool VDBToTexture(GLuint& volumeTexture, const HNS::OpenFloatGrid & in_data) const;
 
    private:
 	static void initialize();
