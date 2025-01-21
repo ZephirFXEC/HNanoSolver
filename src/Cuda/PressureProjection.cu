@@ -20,13 +20,13 @@ __global__ void divergence(const nanovdb::Coord* __restrict__ d_coord, float* __
 	const nanovdb::Vec3f c = coord.asVec3s();  // This is in index space
 
 	// to get the face-centered velocities along each axis.
-	const float u_i_p = sampleMACVelocity(velSampler, c + nanovdb::Vec3f( 0.5f, 0.0f, 0.0f))[0];
+	const float u_i_p = sampleMACVelocity(velSampler, c + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
 	const float u_i_m = sampleMACVelocity(velSampler, c + nanovdb::Vec3f(-0.5f, 0.0f, 0.0f))[0];
 
-	const float v_j_p = sampleMACVelocity(velSampler, c + nanovdb::Vec3f(0.0f,  0.5f, 0.0f))[1];
+	const float v_j_p = sampleMACVelocity(velSampler, c + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
 	const float v_j_m = sampleMACVelocity(velSampler, c + nanovdb::Vec3f(0.0f, -0.5f, 0.0f))[1];
 
-	const float w_k_p = sampleMACVelocity(velSampler, c + nanovdb::Vec3f(0.0f, 0.0f,  0.5f))[2];
+	const float w_k_p = sampleMACVelocity(velSampler, c + nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
 	const float w_k_m = sampleMACVelocity(velSampler, c + nanovdb::Vec3f(0.0f, 0.0f, -0.5f))[2];
 
 	// Divergence: (u(i+1/2)-u(i-1/2) + v(j+1/2)-v(j-1/2) + w(k+1/2)-w(k-1/2)) / dx
@@ -37,25 +37,28 @@ __global__ void divergence(const nanovdb::Coord* __restrict__ d_coord, float* __
 	d_value[tid] = divX + divY + divZ;
 }
 
-__global__ void pressureJacobiIteration(const nanovdb::Coord* __restrict__ d_coords, const size_t npoints,
+__global__ void pressureJacobiIteration(const nanovdb::Coord* __restrict__ d_coords, size_t npoints,
                                         const nanovdb::FloatGrid* __restrict__ pressureGrid,
                                         const nanovdb::FloatGrid* __restrict__ divergenceGrid,
                                         const nanovdb::FloatGrid* __restrict__ newPressureGrid) {
 	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 	if (tid >= npoints) return;
 
+	// Accessors
 	const auto pressureAccessor = pressureGrid->tree().getAccessor();
 	const auto divergenceAccessor = divergenceGrid->tree().getAccessor();
 	const auto newPressureAccessor = newPressureGrid->tree().getAccessor();
 
+	// Samplers
 	const auto pressureSampler = nanovdb::createSampler<1>(pressureAccessor);
 	const auto divergenceSampler = nanovdb::createSampler<1>(divergenceAccessor);
 
+	// Current cell's coordinate
 	const nanovdb::Coord coord = d_coords[tid];
-	const nanovdb::Vec3f c = coord.asVec3s();  // index-space coordinates
+	const nanovdb::Vec3f c = coord.asVec3s();  // index space
 	const float dx = pressureGrid->voxelSize()[0];
 
-	// Neighbor coords in index space
+	// Offsets in index space
 	const nanovdb::Vec3f cxp1 = c + nanovdb::Vec3f(1.0f, 0.0f, 0.0f);
 	const nanovdb::Vec3f cxm1 = c + nanovdb::Vec3f(-1.0f, 0.0f, 0.0f);
 	const nanovdb::Vec3f cyp1 = c + nanovdb::Vec3f(0.0f, 1.0f, 0.0f);
@@ -63,7 +66,7 @@ __global__ void pressureJacobiIteration(const nanovdb::Coord* __restrict__ d_coo
 	const nanovdb::Vec3f czp1 = c + nanovdb::Vec3f(0.0f, 0.0f, 1.0f);
 	const nanovdb::Vec3f czm1 = c + nanovdb::Vec3f(0.0f, 0.0f, -1.0f);
 
-	// Neighboring pressures using the sampler
+	// Neighbor pressures
 	const float p_xp1 = pressureSampler(cxp1);
 	const float p_xm1 = pressureSampler(cxm1);
 	const float p_yp1 = pressureSampler(cyp1);
@@ -71,59 +74,61 @@ __global__ void pressureJacobiIteration(const nanovdb::Coord* __restrict__ d_coo
 	const float p_zp1 = pressureSampler(czp1);
 	const float p_zm1 = pressureSampler(czm1);
 
-	// Divergence at c
+	// Divergence at center
 	const float div = divergenceSampler(c);
 
-	// Jacobi iteration step: (sum_of_neighbors - div * dx^2) / 6
+	// Jacobi iteration step (standard 6-neighbor Laplacian):
+	// p_new = ( sum_of_neighbors - div * dx^2 ) / 6
 	const float p_new = (p_xp1 + p_xm1 + p_yp1 + p_ym1 + p_zp1 + p_zm1 - div * dx * dx) / 6.0f;
 
-	// Write the new pressure value
+	// Write the new pressure
 	newPressureAccessor.set<nanovdb::SetVoxel<float>>(coord, p_new);
 }
 
-__global__ void subtractPressureGradient(const nanovdb::Coord* __restrict__ d_coords, const size_t npoints,
-                                         const nanovdb::Vec3fGrid* __restrict__ vel, const nanovdb::FloatGrid* __restrict__ pressureGrid,
-                                         const CudaResources<nanovdb::Vec3f, true> out, const float voxelSize) {
-	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-	if (tid >= npoints) return;
 
-	const auto pressureAccessor = pressureGrid->tree().getAccessor();
-	const auto velAccessor = vel->tree().getAccessor();
+__global__ void subtractPressureGradient(const nanovdb::Coord* __restrict__ d_coords, size_t npoints,
+                                         const nanovdb::Vec3fGrid* __restrict__ velGrid,       // velocity at faces
+                                         const nanovdb::FloatGrid* __restrict__ pressureGrid,  // pressure at cell centers
+                                         CudaResources<nanovdb::Vec3f, true> out, float voxelSize) {
+    const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= npoints) return;
 
-	const auto pressureSampler = nanovdb::createSampler<1>(pressureAccessor);
-	const auto velSampler = nanovdb::createSampler<1>(velAccessor);
+    // Accessors / Samplers
+    const auto pressureAccessor = pressureGrid->tree().getAccessor();
+    const auto velAccessor = velGrid->tree().getAccessor();
+    const auto pressureSampler = nanovdb::createSampler<1>(pressureAccessor);
+    const auto velSampler = nanovdb::createSampler<1>(velAccessor);
 
-	// Assume a time step dt = 1/24
-	const float dt = 1.0f / 24.0f;
-	const float dx = voxelSize;
+    const float dx = voxelSize;
 
-	const nanovdb::Vec3f coord = d_coords[tid].asVec3s();
+    // The cell center coordinate
+    const nanovdb::Vec3f c = d_coords[tid].asVec3s();
+    nanovdb::Vec3f v = sampleMACVelocity(velSampler, c);
 
-	// Sample pressures at neighboring cells
-	const float p_xp1 = pressureSampler(coord + nanovdb::Vec3f(1.0f, 0.0f, 0.0f));
-	const float p_xm1 = pressureSampler(coord + nanovdb::Vec3f(-1.0f, 0.0f, 0.0f));
-	const float p_yp1 = pressureSampler(coord + nanovdb::Vec3f(0.0f, 1.0f, 0.0f));
-	const float p_ym1 = pressureSampler(coord + nanovdb::Vec3f(0.0f, -1.0f, 0.0f));
-	const float p_zp1 = pressureSampler(coord + nanovdb::Vec3f(0.0f, 0.0f, 1.0f));
-	const float p_zm1 = pressureSampler(coord + nanovdb::Vec3f(0.0f, 0.0f, -1.0f));
+    // For u component: Sample velocity at (i+1/2,j,k) relative to cell center
+    {
+        // For x-component, we're already at the face center
+        const float p_left = pressureSampler(c);                                    // p(i,j,k)
+        const float p_right = pressureSampler(c + nanovdb::Vec3f(1, 0.0f, 0.0f)); // p(i+1,j,k)
+        v[0] -= (p_right - p_left) / dx;
+    }
 
-	// Compute the pressure gradient using central differences in index space,
-	// then convert to world space by dividing by dx.
-	const float gradX = (p_xp1 - p_xm1) / (2.0f * dx);
-	const float gradY = (p_yp1 - p_ym1) / (2.0f * dx);
-	const float gradZ = (p_zp1 - p_zm1) / (2.0f * dx);
+    // For v component: Sample velocity at (i,j+1/2,k) relative to cell center
+    {
+        const float p_bottom = pressureSampler(c);                                    // p(i,j,k)
+        const float p_top = pressureSampler(c + nanovdb::Vec3f(0.0f, 1, 0.0f));     // p(i,j+1,k)
+        v[1] -= (p_top - p_bottom) / dx;
+    }
 
-	nanovdb::Vec3f v = velSampler(coord);
+    // For w component: Sample velocity at (i,j,k+1/2) relative to cell center
+    {
+        const float p_back = pressureSampler(c);                                    // p(i,j,k)
+        const float p_front = pressureSampler(c + nanovdb::Vec3f(0.0f, 0.0f, 1)); // p(i,j,k+1)
+        v[2] -= (p_front - p_back) / dx;
+    }
 
-	// Update velocity using the time step dt:
-	// v_new = v - dt * ∇p (assuming density = 1 for simplicity)
-	v[0] -= gradX;
-	v[1] -= gradY;
-	v[2] -= gradZ;
-
-	out.d_values[tid] = v;
+    out.d_values[tid] = v;
 }
-
 
 void pressure_projection(const nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& in_vel, HNS::OpenVectorGrid& in_data,
                          HNS::OpenVectorGrid& out_data, const size_t iteration, const cudaStream_t& stream) {
@@ -186,27 +191,27 @@ extern "C" void PressureProjection(const nanovdb::GridHandle<nanovdb::CudaDevice
 
 extern "C" void Divergence(const nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& in_vel, HNS::OpenVectorGrid& in_data,
                            HNS::OpenFloatGrid& out_data, const cudaStream_t& stream) {
-    using BufferT = nanovdb::CudaDeviceBuffer;
+	using BufferT = nanovdb::CudaDeviceBuffer;
 
-    const size_t npoints = in_data.size;
-    constexpr unsigned int numThreads = 256;
-    const unsigned int numBlocks = blocksPerGrid(npoints, numThreads);
+	const size_t npoints = in_data.size;
+	constexpr unsigned int numThreads = 256;
+	const unsigned int numBlocks = blocksPerGrid(npoints, numThreads);
 
-    CudaResources<float, false> div_resources(npoints, stream);
-    div_resources.LoadPointCoord(in_data.pCoords(), npoints, stream);
+	CudaResources<float, false> div_resources(npoints, stream);
+	div_resources.LoadPointCoord(in_data.pCoords(), npoints, stream);
 
-    const nanovdb::Vec3fGrid* in_vel_grid = in_vel.deviceGrid<nanovdb::Vec3f>();
-    nanovdb::GridHandle<BufferT> divergence_handle = nanovdb::cudaVoxelsToGrid<float>(div_resources.d_coords, npoints, 0.2f);
+	const nanovdb::Vec3fGrid* in_vel_grid = in_vel.deviceGrid<nanovdb::Vec3f>();
+	nanovdb::GridHandle<BufferT> divergence_handle = nanovdb::cudaVoxelsToGrid<float>(div_resources.d_coords, npoints, 0.2f);
 
-    // Set Divergence Grid
-    divergence<<<numBlocks, numThreads, 0, stream>>>(div_resources.d_coords, div_resources.d_values, npoints, in_vel_grid);
+	// Set Divergence Grid
+	divergence<<<numBlocks, numThreads, 0, stream>>>(div_resources.d_coords, div_resources.d_values, npoints, in_vel_grid);
 
-    // copy divergence back to host
-    out_data.allocateCudaPinned(npoints);
-    cudaCheck(cudaMemcpy(out_data.pCoords(), div_resources.d_coords, npoints * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost));
-    cudaCheck(cudaMemcpy(out_data.pValues(), div_resources.d_values, npoints * sizeof(float), cudaMemcpyDeviceToHost));
+	// copy divergence back to host
+	out_data.allocateCudaPinned(npoints);
+	cudaCheck(cudaMemcpy(out_data.pCoords(), div_resources.d_coords, npoints * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost));
+	cudaCheck(cudaMemcpy(out_data.pValues(), div_resources.d_values, npoints * sizeof(float), cudaMemcpyDeviceToHost));
 
-    // Unload data
-    div_resources.cleanup(stream);
-    cudaCheckError();
+	// Unload data
+	div_resources.cleanup(stream);
+	cudaCheckError();
 }
