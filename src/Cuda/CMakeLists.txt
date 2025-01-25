@@ -11,5 +11,13 @@ add_library(Kernels STATIC
         PointToGrid.cu
 )
 
+target_compile_options(Kernels PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>
+)
+
+target_link_libraries(Kernels PRIVATE CUDA::cudart)
+
+target_include_directories(Kernels PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
 target_compile_features(Kernels PUBLIC cxx_std_17)
-target_link_libraries(Kernels CUDA::cudart)
