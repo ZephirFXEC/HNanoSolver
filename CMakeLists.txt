@@ -4,6 +4,9 @@ set(CMAKE_CXX_STANDARD 17)
 
 project(HNanoSolver LANGUAGES CXX CUDA)
 
+include(CTest)
+enable_testing()
+
 add_compile_definitions(
         SESI_OPENVDB
 )
@@ -31,7 +34,7 @@ houdini_generate_proto_headers( FILES
         src/SOP/ProjectNonDivergent/SOP_VDBProjectNonDivergent.cpp
 )
 
-########################  Utils library ########################################################################
+########################  Utils library ################################################################################
 add_library(Utils STATIC
         src/Utils/ScopedTimer.hpp
         src/Utils/OpenToNano.hpp
@@ -49,6 +52,11 @@ target_include_directories(Utils PUBLIC
         ${CMAKE_CURRENT_BINARY_DIR}
         $ENV{HFS}/toolkit/include
 )
+########################################################################################################################
+
+
+########################  Run Tests ####################################################################################
+add_subdirectory(src/Tests)
 ########################################################################################################################
 
 # ------- Compile HNanoViewer -
@@ -154,3 +162,10 @@ houdini_configure_target(SOP_VDBFromGrid $ENV{DSO_Path})
 houdini_configure_target(SOP_Advect $ENV{DSO_Path})
 houdini_configure_target(SOP_AdvectVelocity $ENV{DSO_Path})
 houdini_configure_target(SOP_ProjectNonDivergent $ENV{DSO_Path})
+
+add_custom_target(run_tests ALL
+        COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure
+        DEPENDS IndexGrid
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        COMMENT "Running unit tests after build..."
+)

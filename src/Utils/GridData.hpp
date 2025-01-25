@@ -173,10 +173,10 @@ struct GridIndexedData {
 	}
 
 	/// @return how many elements are allocated
-	size_t size() const { return m_size; }
+	[[nodiscard]] size_t size() const { return m_size; }
 
 	/// @return the number of distinct named value blocks
-	size_t numValueBlocks() const { return m_valueBlocks.size(); }
+	[[nodiscard]] size_t numValueBlocks() const { return m_valueBlocks.size(); }
 
 	/// @return the name of the i-th value block
 	[[nodiscard]] const std::string& blockName(const size_t i) const { return m_valueBlocks[i].second; }
@@ -202,7 +202,7 @@ struct GridIndexedData {
 
    private:
 	/// @brief Find index of block by name, or -1 if none
-	int findBlockIndex(const std::string& name) const {
+	[[nodiscard]] int findBlockIndex(const std::string& name) const {
 		for (size_t i = 0; i < m_valueBlocks.size(); ++i) {
 			if (m_valueBlocks[i].second == name) {
 				return static_cast<int>(i);
@@ -217,7 +217,7 @@ struct GridIndexedData {
 
 	// A list of (valueBlock, name). Each valueBlock is an IValueBlock (type-erased).
 	// The 'std::unique_ptr<IValueBlock>' can point to a TypedValueBlock<T> of any T.
-	std::vector<std::pair<std::unique_ptr<IValueBlock>, std::string>> m_valueBlocks;
+	std::vector<std::pair<std::unique_ptr<IValueBlock>, std::string>> m_valueBlocks{};
 };
 
 
