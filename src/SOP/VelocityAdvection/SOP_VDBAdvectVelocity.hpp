@@ -3,10 +3,8 @@
 #include <PRM/PRM_TemplateBuilder.h>
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
-#include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/CreateNanoGrid.h>
-#include <nanovdb/util/NanoToOpenVDB.h>
-#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
+
+#include <nanovdb/tools/CreateNanoGrid.h>
 
 #include "SOP_VDBAdvectVelocity.proto.h"
 #include "Utils/GridData.hpp"

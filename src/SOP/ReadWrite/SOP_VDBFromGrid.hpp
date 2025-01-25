@@ -33,6 +33,8 @@ class SOP_HNanoVDBFromGrid final : public SOP_Node {
 		switch (idx) {
 			case 0:
 				return "Input Grids";
+			case 1:
+				return "Velocity Grids";
 			default:
 				return "default";
 		}

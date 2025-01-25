@@ -5,8 +5,7 @@ include_directories("$ENV{HFS}/toolkit/include")
 add_library(Kernels STATIC
         PointToGrid.cuh
         utils.cuh
-        HNanoGrid/HNanoGrid.cuh
-
+        Kernels.cu
         Advection.cu
         PressureProjection.cu
         PointToGrid.cu

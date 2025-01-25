@@ -1,7 +1,7 @@
 #pragma once
 
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/SampleFromVoxels.h>
+#include <nanovdb/math/SampleFromVoxels.h>
 
 #include "../Utils/GridData.hpp"
 
@@ -24,12 +24,6 @@ __global__ void lambdaKernelLeaf(const size_t leafCount, Func func, Args... args
 	func(tid, args...);
 }
 
-inline __global__ void interleaveToVec3(nanovdb::Vec3f* output, const float* x, const float* y, const float* z, const size_t size) {
-	const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-	if (idx >= size) return;
-
-	output[idx] = nanovdb::Vec3f(x[idx], y[idx], z[idx]);
-}
 
 inline size_t blocksPerGrid(const size_t numItems, const size_t threadsPerBlock) {
 	NANOVDB_ASSERT(numItems > 0 && threadsPerBlock >= 32 && threadsPerBlock % 32 == 0);
@@ -70,86 +64,20 @@ __device__ __forceinline__ float enforceNonNegative(const float x) { return fmax
 __device__ __forceinline__ nanovdb::Vec3f enforceNonNegative(const nanovdb::Vec3f& v) { return v; }
 
 
-template <typename ValueT, bool HasTemp>
+template <typename CoordT, typename ValueT, bool HasTemp>
 struct CudaResources;
 
 
-// Specialisation for Staggered Fields
-struct CudaResourcesStaggered {
-	float* d_xp = nullptr;
-	float* d_yp = nullptr;
-	float* d_zp = nullptr;
-	nanovdb::Coord* d_coords = nullptr;
-
-	__host__ CudaResourcesStaggered(const size_t npoints, const cudaStream_t& stream) {
-		cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream));
-		cudaCheck(cudaMallocAsync(&d_xp, npoints * sizeof(float), stream));
-		cudaCheck(cudaMallocAsync(&d_yp, npoints * sizeof(float), stream));
-		cudaCheck(cudaMallocAsync(&d_zp, npoints * sizeof(float), stream));
-	}
-
-	__host__ void LoadPointData(const HNS::OpenStaggeredGrid<float>& in_data, const cudaStream_t& stream) {
-		// Copy data from host to device asynchronously
-		cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
-		cudaCheck(cudaMemcpyAsync(d_xp, in_data.pValuesXp(), in_data.size * sizeof(float), cudaMemcpyHostToDevice, stream));
-		cudaCheck(cudaMemcpyAsync(d_yp, in_data.pValuesYp(), in_data.size * sizeof(float), cudaMemcpyHostToDevice, stream));
-		cudaCheck(cudaMemcpyAsync(d_zp, in_data.pValuesZp(), in_data.size * sizeof(float), cudaMemcpyHostToDevice, stream));
-	}
-
-	__host__ void LoadPointCoord(const openvdb::Coord* in_data, const size_t size, const cudaStream_t& stream) {
-		cudaCheck(cudaMemcpyAsync(d_coords, in_data, size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
-	}
-
-	__host__ void LoadPointValue(const float* in_xp, const float* in_yp, const float* in_zp, const size_t size,
-	                             const cudaStream_t& stream) {
-		cudaCheck(cudaMemcpyAsync(d_xp, in_xp, size * sizeof(float), cudaMemcpyHostToDevice, stream));
-		cudaCheck(cudaMemcpyAsync(d_yp, in_yp, size * sizeof(float), cudaMemcpyHostToDevice, stream));
-		cudaCheck(cudaMemcpyAsync(d_zp, in_zp, size * sizeof(float), cudaMemcpyHostToDevice, stream));
-	}
-
-	__host__ void UnloadPointData(HNS::NanoGrid<nanovdb::Vec3f>& out_data, const cudaStream_t& stream) {
-		cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost, stream));
-
-		nanovdb::Vec3f* d_values;
-		cudaCheck(cudaMalloc(&d_values, out_data.size * sizeof(nanovdb::Vec3f)));
-
-		constexpr int blockSize = 256;
-		const size_t numBlocks = blocksPerGrid(out_data.size, blockSize);
-		interleaveToVec3<<<numBlocks, blockSize, 0, stream>>>(d_values, d_xp, d_yp, d_zp, out_data.size);
-
-		// Copy interleaved data back to host
-		cudaCheck(cudaMemcpyAsync(out_data.pValues(), d_values, out_data.size * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost, stream));
-	}
-
-	__host__ void cleanup(const cudaStream_t& stream) {
-		// Synchronize the stream to ensure all operations are complete
-		cudaCheck(cudaStreamSynchronize(stream));
-		clear();
-	}
-
-	__host__ void clear() {
-		if (d_coords) cudaCheck(cudaFree(d_coords));
-		if (d_xp) cudaCheck(cudaFree(d_xp));
-		if (d_yp) cudaCheck(cudaFree(d_yp));
-		if (d_zp) cudaCheck(cudaFree(d_zp));
-
-		d_coords = nullptr;
-		d_xp = nullptr;
-		d_yp = nullptr;
-		d_zp = nullptr;
-	}
-};
-
 // Specialization when HasTemp is true
-template <typename ValueT>
-struct CudaResources<ValueT, true> {
-	nanovdb::Coord* d_coords = nullptr;
+template <typename CoordT, typename ValueT>
+struct CudaResources<CoordT, ValueT, true> {
+	CoordT* d_coords = nullptr;
 	ValueT* d_values = nullptr;
 	ValueT* d_temp_values = nullptr;
 
 	__host__ CudaResources(const size_t npoints, const cudaStream_t& stream) {
 		// Allocate device memory asynchronously
-		cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream));
+		cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(CoordT), stream));
 		cudaCheck(cudaMallocAsync(&d_values, npoints * sizeof(ValueT), stream));
 		cudaCheck(cudaMallocAsync(&d_temp_values, npoints * sizeof(ValueT), stream));
 		// No need to synchronize here; subsequent operations will ensure proper sequencing
@@ -158,12 +86,12 @@ struct CudaResources<ValueT, true> {
 	template <typename ValueInT>
 	__host__ void LoadPointData(const HNS::OpenGrid<ValueInT>& in_data, const cudaStream_t& stream) {
 		// Copy data from host to device asynchronously
-		cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
+		cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(CoordT), cudaMemcpyHostToDevice, stream));
 		cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues(), in_data.size * sizeof(ValueInT), cudaMemcpyHostToDevice, stream));
 	}
 
 	__host__ void LoadPointCoord(const openvdb::Coord* in_data, const size_t size, const cudaStream_t& stream) {
-		cudaCheck(cudaMemcpyAsync(d_coords, in_data, size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
+		cudaCheck(cudaMemcpyAsync(d_coords, in_data, size * sizeof(CoordT), cudaMemcpyHostToDevice, stream));
 	}
 
 	template <typename ValueInT>
@@ -174,7 +102,7 @@ struct CudaResources<ValueT, true> {
 	template <typename ValueOutT>
 	__host__ void UnloadPointData(HNS::NanoGrid<ValueOutT>& out_data, const cudaStream_t& stream) {
 		// Copy data from device to host asynchronously
-		cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost, stream));
+		cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(CoordT), cudaMemcpyDeviceToHost, stream));
 		cudaCheck(cudaMemcpyAsync(out_data.pValues(), d_temp_values, out_data.size * sizeof(ValueOutT), cudaMemcpyDeviceToHost, stream));
 	}
 
@@ -195,26 +123,32 @@ struct CudaResources<ValueT, true> {
 };
 
 // Specialization when HasTemp is false
-template <typename ValueT>
-struct CudaResources<ValueT, false> {
-	nanovdb::Coord* d_coords = nullptr;
+template <typename CoordT, typename ValueT>
+struct CudaResources<CoordT, ValueT, false> {
+	CoordT* d_coords = nullptr;
 	ValueT* d_values = nullptr;
 
 	__host__ CudaResources(const size_t npoints, const cudaStream_t& stream) {
 		// Allocate device memory asynchronously
-		cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(nanovdb::Coord), stream));
+		cudaCheck(cudaMallocAsync(&d_coords, npoints * sizeof(CoordT), stream));
 		cudaCheck(cudaMallocAsync(&d_values, npoints * sizeof(ValueT), stream));
 	}
 
 	template <typename ValueInT>
 	__host__ void LoadPointData(const HNS::OpenGrid<ValueInT>& in_data, const cudaStream_t& stream) {
 		// Copy data from host to device asynchronously
-		cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
+		cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(CoordT), cudaMemcpyHostToDevice, stream));
 		cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues(), in_data.size * sizeof(ValueInT), cudaMemcpyHostToDevice, stream));
 	}
 
+	__host__ void LoadPointData(const HNS::IndexFloatGrid& in_data, const cudaStream_t& stream) const {
+		// Copy data from host to device asynchronously
+		cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(CoordT), cudaMemcpyHostToDevice, stream));
+		cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues(), in_data.size * sizeof(float), cudaMemcpyHostToDevice, stream));
+	}
+
 	__host__ void LoadPointCoord(const openvdb::Coord* in_data, const size_t size, const cudaStream_t& stream) const {
-		cudaCheck(cudaMemcpyAsync(d_coords, in_data, size * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream));
+		cudaCheck(cudaMemcpyAsync(d_coords, in_data, size * sizeof(CoordT), cudaMemcpyHostToDevice, stream));
 	}
 
 	template <typename ValueInT>
@@ -225,7 +159,7 @@ struct CudaResources<ValueT, false> {
 	template <typename ValueOutT>
 	__host__ void UnloadPointData(HNS::NanoGrid<ValueOutT>& out_data, const cudaStream_t& stream) {
 		// Copy data from device to host asynchronously
-		cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(nanovdb::Coord), cudaMemcpyDeviceToHost, stream));
+		cudaCheck(cudaMemcpyAsync(out_data.pCoords(), d_coords, out_data.size * sizeof(CoordT), cudaMemcpyDeviceToHost, stream));
 		cudaCheck(cudaMemcpyAsync(out_data.pValues(), d_values, out_data.size * sizeof(ValueOutT), cudaMemcpyDeviceToHost, stream));
 	}
 
@@ -246,7 +180,7 @@ struct CudaResources<ValueT, false> {
 
 template <typename T, typename U = std::conditional_t<std::is_same_v<T, float>, nanovdb::FloatTree, nanovdb::Vec3fTree>,
           bool HasTemp = true>
-__global__ void set_grid_values(const CudaResources<T, HasTemp> ressources, const size_t npoints, nanovdb::Grid<U>* __restrict__ d_grid) {
+__global__ void set_grid_values(const CudaResources<nanovdb::Coord, T, HasTemp> ressources, const size_t npoints, nanovdb::Grid<U>* __restrict__ d_grid) {
 	auto accessor = d_grid->tree().getAccessor();
 
 	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -260,7 +194,7 @@ __global__ void set_grid_values(const CudaResources<T, HasTemp> ressources, cons
 
 template <typename T, typename U = std::conditional_t<std::is_same_v<T, float>, nanovdb::FloatTree, nanovdb::Vec3fTree>,
           bool HasTemp = true>
-__global__ void zero_init_grid(const CudaResources<T, HasTemp> resources, const size_t npoints, nanovdb::Grid<U>* __restrict__ d_grid) {
+__global__ void zero_init_grid(const CudaResources<nanovdb::Coord, T, HasTemp> resources, const size_t npoints, nanovdb::Grid<U>* __restrict__ d_grid) {
 	auto accessor = d_grid->tree().getAccessor();
 
 	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -273,7 +207,7 @@ __global__ void zero_init_grid(const CudaResources<T, HasTemp> resources, const 
 }
 
 template <typename T, typename U = std::conditional_t<std::is_same_v<T, float>, nanovdb::FloatTree, nanovdb::Vec3fTree>>
-__global__ void get_grid_values(const CudaResources<T, true> ressources, const size_t npoints, nanovdb::Grid<U>* __restrict__ d_grid) {
+__global__ void get_grid_values(const CudaResources<nanovdb::Coord, T, true> ressources, const size_t npoints, nanovdb::Grid<U>* __restrict__ d_grid) {
 	auto accessor = d_grid->tree().getAccessor();
 
 	size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -285,7 +219,7 @@ __global__ void get_grid_values(const CudaResources<T, true> ressources, const s
 }
 
 inline __device__ nanovdb::Vec3f sampleMACVelocity(
-    const decltype(nanovdb::createSampler<1>(
+    const decltype(nanovdb::math::createSampler<1>(
         std::declval<const decltype(std::declval<nanovdb::Vec3fGrid>().tree().getAccessor())>()))& velSampler,
     const nanovdb::Vec3f& pos) {
 	const float u = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
@@ -295,10 +229,9 @@ inline __device__ nanovdb::Vec3f sampleMACVelocity(
 }
 
 inline __device__ nanovdb::Vec3f MACToFaceCentered(
-	const decltype(nanovdb::createSampler<1>(
-		std::declval<const decltype(std::declval<nanovdb::Vec3fGrid>().tree().getAccessor())>()))& velSampler,
-	const nanovdb::Vec3f& pos) {
-
+    const decltype(nanovdb::math::createSampler<1>(
+        std::declval<const decltype(std::declval<nanovdb::Vec3fGrid>().tree().getAccessor())>()))& velSampler,
+    const nanovdb::Vec3f& pos) {
 	const float up = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
 	const float vp = velSampler(pos + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
 	const float wp = velSampler(pos + nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
@@ -307,5 +240,5 @@ inline __device__ nanovdb::Vec3f MACToFaceCentered(
 	const float vm = velSampler(pos - nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
 	const float wm = velSampler(pos - nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
 
-	return {(up+um)/2.0f, (vp+vm)/2.0f, (wp+wm)/2.0f};
+	return {(up + um) / 2.0f, (vp + vm) / 2.0f, (wp + wm) / 2.0f};
 }

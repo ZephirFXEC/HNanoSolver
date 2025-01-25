@@ -14,15 +14,22 @@ Run the kernels on the GPU
 export back value / coord to the CPU to build the grid.
 */
 
+#define NANOVDB_USE_OPENVDB
 
 #include "SOP_VDBFromGrid.hpp"
 
 #include <UT/UT_DSOVersion.h>
 #include <cuda_runtime_api.h>
+#include <nanovdb/cuda/DeviceBuffer.h>
+#include <nanovdb/tools/CreateNanoGrid.h>
 
 #include "Utils/OpenToNano.hpp"
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
+
+
+
+extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>*, HNS::IndexFloatGrid& , cudaStream_t stream);
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 {
@@ -33,6 +40,15 @@ const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 		type	string
 		default	{ "" }
 		parmtag	{ "script_action" "import soputils\nkwargs['geometrytype'] = (hou.geometryType.Primitives,)\nkwargs['inputindex'] = 0\nsoputils.selectGroupParm(kwargs)" }
+		parmtag	{ "script_action_help" "Select geometry from an available viewport.\nShift-click to turn on Select Groups." }
+		parmtag	{ "script_action_icon" "BUTTONS_reselect" }
+    }
+    parm {
+		name	"bgroup"
+		label	"Velocity Volumes"
+		type	string
+		default	{ "" }
+		parmtag	{ "script_action" "import soputils\nkwargs['geometrytype'] = (hou.geometryType.Primitives,)\nkwargs['inputindex'] = 1\nsoputils.selectGroupParm(kwargs)" }
 		parmtag	{ "script_action_help" "Select geometry from an available viewport.\nShift-click to turn on Select Groups." }
 		parmtag	{ "script_action_icon" "BUTTONS_reselect" }
     }
@@ -50,13 +66,14 @@ PRM_Template* SOP_HNanoVDBFromGrid::buildTemplates() {
 	static PRM_TemplateBuilder templ("SOP_VDBFromGrid.cpp", SOP_HNanoVDBFromGridVerb::theDsFile);
 	if (templ.justBuilt()) {
 		templ.setChoiceListPtr("agroup", &SOP_Node::namedVolumesMenu);
+		templ.setChoiceListPtr("bgroup", &SOP_Node::namedVolumesMenu);
 	}
 	return templ.templates();
 }
 
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanofromgrid", "HNanoFromGrid", SOP_HNanoVDBFromGrid::myConstructor,
-	                                   SOP_HNanoVDBFromGrid::buildTemplates(), 1, 1, nullptr, 0));
+	                                   SOP_HNanoVDBFromGrid::buildTemplates(), 2, 2, nullptr, 0));
 }
 
 
@@ -69,51 +86,58 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	openvdb_houdini::HoudiniInterrupter boss("Computing VDB grids");
 	const auto& sopparms = cookparms.parms<SOP_VDBFromGridParms>();
 	GU_Detail* detail = cookparms.gdh().gdpNC();
-	const GU_Detail* in_geo = cookparms.inputGeo(0);
+	const GU_Detail* in1_geo = cookparms.inputGeo(0);
+	const GU_Detail* in2_geo = cookparms.inputGeo(1);
 
 	std::vector<openvdb::FloatGrid::Ptr> AGrid;
-	if (auto err = loadGrid<openvdb::FloatGrid>(in_geo, AGrid, sopparms.getAgroup()); err != UT_ERROR_NONE) {
+	if (auto err = loadGrid<openvdb::FloatGrid>(in1_geo, AGrid, sopparms.getAgroup()); err != UT_ERROR_NONE) {
 		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load grids");
 	}
+
+	std::vector<openvdb::VectorGrid::Ptr> BGrid;
+	if (auto err = loadGrid<openvdb::VectorGrid>(in2_geo, BGrid, sopparms.getBgroup()); err != UT_ERROR_NONE) {
+		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load grids");
+	}
+
+
+
+	using SrcGridT  = openvdb::FloatGrid;
+	using DstBuildT = nanovdb::ValueOnIndex;
+	using BufferT   = nanovdb::cuda::DeviceBuffer;
 
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
 
-	HNS::OpenFloatGrid open_out_data;
+
+	HNS::IndexFloatGrid toSample;
 	{
-		ScopedTimer timer("Extracting voxels from " + AGrid[0]->getName());
-		HNS::extractFromOpenVDB<openvdb::FloatGrid, float>(AGrid[0], open_out_data);
+		ScopedTimer t("Extracting data from OpenVDB");
+		HNS::extractToGlobalIdx(BGrid[0], AGrid[0], toSample);
 	}
 
-	HNS::NanoFloatGrid out_data;
 	{
-		ScopedTimer timer("Creating " + AGrid[0]->getName() + " NanoVDB grid");
+		ScopedTimer timer("NanoVDB conversion");
+		nanovdb::GridHandle<BufferT> idxHandle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*AGrid[0], 1u, false , false, 0);
 
-		pointToGridFloat(open_out_data, sopparms.getVoxelsize(), out_data, stream);
+		// auto idxHandle = nanovdb::tools::openToNanoVDB<SrcGridT, DstBuildT, BufferT>(*AGrid[0], 1u, false, false, 0);
+		idxHandle.deviceUpload(stream, false);
+		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>(); // get a (raw) pointer to a NanoVDB grid of value type float on the GPU
+
+		launch_kernels(gpuGrid, toSample, stream); // Call a host method to print a grid value on both the CPU and GPU
+
+		cudaStreamDestroy(stream); // Destroy the CUDA stream
 	}
 
-	detail->clearAndDestroy();
-
+	/*
 	{
-		ScopedTimer timer("Building " + AGrid[0]->getName() + " grid");
+		ScopedTimer timer("OpenVDB To NanoVDB Index Cuda");
 
-		openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create();
-		out->setGridClass(openvdb::GRID_FOG_VOLUME);
-		out->setTransform(openvdb::math::Transform::createLinearTransform(sopparms.getVoxelsize()));
-		out->setName(AGrid[0]->getName());
+		cudaStream_t stream;
+		cudaStreamCreate(&stream);
 
-		openvdb::tree::ValueAccessor<openvdb::FloatTree> valueAccessor(out->tree());
+		openToNanoIndex(AGrid[0], stream);
 
-		for (size_t i = 0; i < out_data.size; ++i) {
-			const auto& coord = out_data.pCoords()[i];
-			const auto& value = out_data.pValues()[i];
-			valueAccessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
-		}
-
-		// Build the GU_PrimVDB from the grid
-		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
+		cudaStreamDestroy(stream); // Destroy the CUDA stream
 	}
-
-
-	cudaStreamDestroy(stream);
+	*/
 }

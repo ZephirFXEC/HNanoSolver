@@ -15,8 +15,8 @@
 
 #define NANOVDB_USE_OPENVDB
 // Include project headers
-#include <nanovdb/util/CreateNanoGrid.h>
-#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
+#include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/cuda/DeviceBuffer.h>
 
 #include "Renderer.hpp"
 #include "Shader.hpp"

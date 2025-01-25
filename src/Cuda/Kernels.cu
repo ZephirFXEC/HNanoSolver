@@ -1,0 +1,83 @@
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: Apache-2.0
+
+#include <nanovdb/NanoVDB.h>  // this defined the core tree data structure of NanoVDB accessable on both the host and device
+#include <openvdb/openvdb.h>
+
+#include <cstdio>  // for printf
+#include <nanovdb/cuda/GridHandle.cuh>
+#include <nanovdb/tools/cuda/IndexToGrid.cuh>
+#include <nanovdb/tools/cuda/PointsToGrid.cuh>
+
+#include "../Utils/OpenToNano.hpp"
+#include "utils.cuh"
+
+__global__ void gpu_kernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, const float* data) {
+
+	const nanovdb::ChannelAccessor<float, nanovdb::ValueOnIndex> acc(*gpuGrid);
+
+	if (!acc) {
+		printf("Error: ChannelAccessor has no valid channel pointer! (null)\n");
+		return;
+	}
+
+	const uint32_t idx000 = acc.idx(0, 0, 0);
+	const uint32_t idx100 = acc.idx(1, 0, 0);
+	const uint32_t idx010 = acc.idx(0, 1, 0);
+	const uint32_t idx001 = acc.idx(0, 0, 1);
+
+	printf("Idx at Coord 0,0,0 : %u\n", idx000);
+	printf("Idx at Coord 1,0,0 : %u\n", idx100);
+	printf("Idx at Coord 0,1,0 : %u\n", idx010);
+	printf("Idx at Coord 0,0,1 : %u\n", idx001);
+
+	/*printf("Sampling Velocity Grid : ");
+	printf("Vel at : %u =  %f%f%f\n", idx000, acc(0, 0, 0)[0], acc(0, 0, 0)[1], acc(0, 0, 0)[2]);
+	printf("Vel at : %u =  %f%f%f\n", idx100, acc(1, 0, 0)[0], acc(1, 0, 0)[1], acc(1, 0, 0)[2]);
+	printf("Vel at : %u =  %f%f%f\n", idx010, acc(0, 1, 0)[0], acc(0, 1, 0)[1], acc(0, 1, 0)[2]);
+	printf("Vel at : %u =  %f%f%f\n", idx001, acc(0, 0, 1)[0], acc(0, 0, 1)[1], acc(0, 0, 1)[2]);
+
+	printf("Sampling Density Grid : ");
+	printf("Density at : %u =  %f\n", idx000, 0.0f);
+	printf("Density at : %u =  %f\n", idx100, 0.0f);
+	printf("Density at : %u =  %f\n", idx010, 0.0f);
+	printf("Density at : %u =  %f\n", idx001, 0.0f);*/
+
+}
+
+
+
+// This is called by the client code on the host
+extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, HNS::IndexFloatGrid& toSample,
+                               cudaStream_t stream) {
+
+	//const CudaResources<uint32_t, float, false> res(toSample.size, stream);
+	//res.LoadPointData(toSample, stream);
+
+	gpu_kernel<<<1, 1, 0, stream>>>(gpuGrid, nullptr); //res.d_values);  // Launch the device kernel asynchronously
+}
+
+
+extern "C" void openToNanoIndex(const openvdb::FloatGrid::Ptr& in_grid, const cudaStream_t stream) {
+	const size_t voxelCount = in_grid->activeVoxelCount();
+	const openvdb::Vec3d voxelSize = in_grid->voxelSize();
+
+	// extract coords from openvdb grid
+	std::vector<nanovdb::Vec3f> coords;
+	coords.reserve(voxelCount);
+	for (auto iter = in_grid->beginValueOn(); iter; ++iter) {
+		const openvdb::Coord& coord = iter.getCoord();
+		coords.emplace_back(coord.x(), coord.y(), coord.z());
+	}
+
+	nanovdb::Vec3f* coord_d = nullptr;
+
+	cudaMalloc(&coord_d, voxelCount * sizeof(nanovdb::Vec3f));
+	cudaMemcpy(coord_d, coords.data(), voxelCount * sizeof(nanovdb::Vec3f), cudaMemcpyHostToDevice);
+
+	const nanovdb::cuda::DeviceBuffer buffer(voxelCount * sizeof(float), false, stream);
+	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
+	    nanovdb::tools::cuda::voxelsToGrid<float>(coord_d, voxelCount, voxelSize[0], buffer, stream);
+
+	const auto* gpuGrid = handle.deviceGrid<nanovdb::PointGrid>();
+}

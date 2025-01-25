@@ -88,6 +88,7 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 		{
 			ScopedTimer timer("Extracting voxels from " + BGrid[0]->getName());
 			HNS::extractFromOpenVDB<openvdb::VectorGrid, openvdb::Vec3f>(BGrid[0], vel_out_data);
+
 		}
 
 		cudaStream_t stream;

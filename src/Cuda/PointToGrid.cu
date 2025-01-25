@@ -11,11 +11,11 @@ extern "C" void pointToGridVector(HNS::OpenVectorGrid& in_data, const float voxe
 }
 
 extern "C" void pointToGridFloatToDevice(HNS::OpenFloatGrid& in_data, const float voxelSize,
-                                         nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream) {
+                                         nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, const cudaStream_t& stream) {
 	pointToGridTemplateToDevice<float, float>(in_data, voxelSize, handle, stream);
 }
 
 extern "C" void pointToGridVectorToDevice(HNS::OpenVectorGrid& in_data, const float voxelSize,
-                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream) {
+                                          nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, const cudaStream_t& stream) {
 	pointToGridTemplateToDevice<openvdb::Vec3f, nanovdb::Vec3f>(in_data, voxelSize, handle, stream);
 }

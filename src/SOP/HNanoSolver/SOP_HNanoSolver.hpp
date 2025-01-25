@@ -12,8 +12,8 @@
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/GridHandle.h>
-#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
+#include <nanovdb/GridHandle.h>
+#include <nanovdb/cuda/DeviceBuffer.h>
 
 #include "Utils/GridData.hpp"
 #include "SOP_HNanoSolver.proto.h"
@@ -54,12 +54,12 @@ class SOP_HNanoSolverCache final : public SOP_NodeCache {
    public:
 	SOP_HNanoSolverCache() : SOP_NodeCache() {}
 	~SOP_HNanoSolverCache() override {
-		if (!pHandle.isEmpty()) {
-			pHandle.reset();
+		if (!pVelHandle.isEmpty()) {
+			pVelHandle.reset();
 		}
 	}
 
-	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pHandle;
+	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pVelHandle;
 };
 
 class SOP_HNanoSolverVerb final : public SOP_NodeVerb {
@@ -77,3 +77,10 @@ class SOP_HNanoSolverVerb final : public SOP_NodeVerb {
 	static const SOP_NodeVerb::Register<SOP_HNanoSolverVerb> theVerb;
 	static const char* const theDsFile;
 };
+
+
+extern "C" void AdvectFloats(std::vector<HNS::OpenFloatGrid>& in_data, const nanovdb::Vec3fGrid* vel_grid, std::vector<HNS::NanoFloatGrid>& out_data,
+							const float voxelSize, const float dt, const cudaStream_t& stream);
+
+extern "C" void pointToGridVectorToDevice(HNS::OpenVectorGrid& in_data, float voxelSize,
+										  nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, const cudaStream_t& stream);

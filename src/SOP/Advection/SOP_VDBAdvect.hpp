@@ -4,8 +4,8 @@
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
 #include <SOP_VDBAdvectVelocity.proto.h>
-#include <nanovdb/util/GridHandle.h>
-#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
+#include <nanovdb/GridHandle.h>
+#include <nanovdb/cuda/DeviceBuffer.h>
 
 #include "SOP_VDBAdvect.proto.h"
 #include "Utils/GridData.hpp"
@@ -50,8 +50,8 @@ class SOP_HNanoVDBAdvectCache final : public SOP_NodeCache {
 		}
 	}
 
-	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pAHandle;
-	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pBHandle;
+	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pAHandle;
+	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pBHandle;
 };
 
 class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
@@ -71,7 +71,7 @@ class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
 };
 
 extern "C" void pointToGridVectorToDevice(HNS::OpenVectorGrid& in_data, float voxelSize,
-                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream);
+                                          nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, const cudaStream_t& stream);
 
 extern "C" void AdvectFloat(HNS::OpenFloatGrid& in_data, const nanovdb::Vec3fGrid* vel_grid, HNS::NanoFloatGrid& out_data, float voxelSize,
                             float dt, const cudaStream_t& stream);

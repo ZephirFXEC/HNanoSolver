@@ -7,9 +7,9 @@
 #include <PRM/PRM_TemplateBuilder.h>
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
-#include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/GridHandle.h>
-#include <nanovdb/util/cuda/CudaDeviceBuffer.h>
+
+#include <nanovdb/GridHandle.h>
+#include <nanovdb/cuda/DeviceBuffer.h>
 
 #include "SOP_VDBProjectNonDivergent.proto.h"
 #include "Utils/GridData.hpp"
@@ -55,7 +55,7 @@ class SOP_HNanoVDBProjectNonDivergentCache final : public SOP_NodeCache {
 		}
 	}
 
-	nanovdb::GridHandle<nanovdb::CudaDeviceBuffer> pHandle;
+	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pHandle;
 };
 
 class SOP_HNanoVDBProjectNonDivergentVerb final : public SOP_NodeVerb {
@@ -75,10 +75,10 @@ class SOP_HNanoVDBProjectNonDivergentVerb final : public SOP_NodeVerb {
 };
 
 extern "C" void pointToGridVectorToDevice(HNS::OpenVectorGrid& in_data, const float voxelSize,
-                                          nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& handle, const cudaStream_t& stream);
+                                          nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, const cudaStream_t& stream);
 
-extern "C" void PressureProjection(const nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& in_vel, HNS::OpenVectorGrid& in_data,
+extern "C" void PressureProjection(const nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& in_vel, HNS::OpenVectorGrid& in_data,
 								   HNS::OpenVectorGrid& out_data, size_t iteration, const cudaStream_t& stream);
 
-extern "C" void Divergence(const nanovdb::GridHandle<nanovdb::CudaDeviceBuffer>& in_vel, HNS::OpenVectorGrid& in_data,
+extern "C" void Divergence(const nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& in_vel, HNS::OpenVectorGrid& in_data,
 						   HNS::OpenFloatGrid& out_data, const cudaStream_t& stream);
