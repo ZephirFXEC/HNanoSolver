@@ -27,17 +27,25 @@ class IndexGridBuilder {
 
 	void addGrid(openvdb::GridBase::Ptr grid, const std::string& name) {
 		if (!grid) {
-			throw std::runtime_error("IndexGridBuilder: grid is null!");
+			throw std::runtime_error("IndexGridBuilder: Grid is null ! Couldn't add grid");
 		}
 		m_grids.emplace_back(std::move(grid), name);
 	}
 
 	void build() {
 		for (const auto& [grid, name] : m_grids) {
-			if (auto floatGrid = openvdb::gridPtrCast<openvdb::FloatGrid>(grid)) {
+			if (const auto floatGrid = openvdb::gridPtrCast<openvdb::FloatGrid>(grid)) {
 				m_outData.addValueBlock<float>(name, AllocationType::CudaPinned, m_totalVoxels);
-			} else if (auto vecGrid = openvdb::gridPtrCast<openvdb::VectorGrid>(grid)) {
+				auto& floatTree = floatGrid->tree();  // reference
+				float* outPtr = m_outData.pValues<float>(name);
+				m_samplers.emplace_back(
+				    [outPtr, &floatTree](const openvdb::Coord& c, const size_t idx) { outPtr[idx] = floatTree.getValue(c); });
+			} else if (const auto vecGrid = openvdb::gridPtrCast<openvdb::VectorGrid>(grid)) {
 				m_outData.addValueBlock<openvdb::Vec3f>(name, AllocationType::CudaPinned, m_totalVoxels);
+				auto& vecTree = vecGrid->tree();
+				openvdb::Vec3f* outPtr = m_outData.pValues<openvdb::Vec3f>(name);
+				m_samplers.emplace_back(
+				    [outPtr, &vecTree](const openvdb::Coord& c, const size_t idx) { outPtr[idx] = vecTree.getValue(c); });
 			} else {
 				throw std::runtime_error("IndexGridBuilder: unsupported grid type!");
 			}
@@ -50,26 +58,21 @@ class IndexGridBuilder {
 
 		parallel_for(tbb::blocked_range<size_t>(0, numLeaves), [&](const tbb::blocked_range<size_t>& range) {
 			for (size_t i = range.begin(); i != range.end(); ++i) {
-
 				const auto& leaf = leafManager.leaf(i);
 				const size_t leafBaseOffset = m_leafOffsets[i];
 				size_t localIdx = 0;
 
 				for (auto iter = leaf.cbeginValueOn(); iter.test(); ++iter) {
-
 					const size_t outIdx = leafBaseOffset + localIdx;
 
 					m_outData.pCoords()[outIdx] = static_cast<uint32_t>(outIdx);
 
 					const openvdb::Coord& c = iter.getCoord();
 
-					for (const auto& [grid, name] : m_grids) {
-						if (const auto floatGrid = openvdb::gridConstPtrCast<openvdb::FloatGrid>(grid)) {
-							m_outData.pValues<float>(name)[outIdx] = floatGrid->tree().getValue(c);
-						} else if (const auto vec3Grid = openvdb::gridConstPtrCast<openvdb::VectorGrid>(grid)) {
-							m_outData.pValues<openvdb::Vec3f>(name)[outIdx] = vec3Grid->tree().getValue(c);
-						}
+					for (const auto& sampler : m_samplers) {
+						sampler(c, outIdx);
 					}
+
 					++localIdx;
 				}
 			}
@@ -79,7 +82,6 @@ class IndexGridBuilder {
 
    private:
 	void computeLeafs() {
-
 		using TreeType = typename GridT::TreeType;
 		const TreeType& tree = m_domainGrid->tree();
 		const openvdb::tree::LeafManager<const TreeType> leafManager(tree);
@@ -126,6 +128,7 @@ class IndexGridBuilder {
 	size_t m_numLeaves = 0;
 	GridIndexedData<uint32_t>& m_outData;
 
+	std::vector<std::function<void(const openvdb::Coord&, size_t)>> m_samplers;
 	std::vector<std::pair<openvdb::GridBase::Ptr, std::string>> m_grids;
 };
 
