@@ -10,6 +10,7 @@ enable_testing()
 
 # ------- Find CUDA -----------
 find_package(CUDAToolkit REQUIRED)
+set(CUDA_ATTACH_VS_BUILD_RULE_TO_CUDA_FILE OFF)
 
 
 # ------- Find Houdini --------
@@ -64,8 +65,9 @@ function(add_sop_library LIBNAME SRC_FILES)
     add_library(${LIBNAME} SHARED ${SRC_FILES})
     target_link_libraries(${LIBNAME} PRIVATE Utils Kernels HoudiniVDB)
     target_include_directories(${LIBNAME} PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            src
             ${CMAKE_CURRENT_BINARY_DIR}
+            $ENV{HFS}/toolkit/include
     )
     target_compile_features(${LIBNAME} PUBLIC cxx_std_17)
 endfunction()

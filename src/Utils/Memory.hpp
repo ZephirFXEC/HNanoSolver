@@ -107,6 +107,14 @@ struct TypedValueBlock final : IValueBlock {
 	TypedValueBlock() = default;
 	~TypedValueBlock() override { TypedValueBlock::clear(); }
 
+	T& operator[](size_t i) {
+		return block.ptr[i];
+	}
+
+	const T& operator[](size_t i) const {
+		return block.ptr[i];
+	}
+
 	/// @brief Allocate the block with the chosen memory mode
 	bool allocate(size_t numElements, const AllocationType mode) {
 		clear();
