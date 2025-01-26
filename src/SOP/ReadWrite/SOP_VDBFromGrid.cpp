@@ -29,7 +29,7 @@ export back value / coord to the CPU to build the grid.
 
 
 
-extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>*, HNS::IndexFloatGrid& , cudaStream_t stream);
+extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>*, void* data, size_t size, cudaStream_t stream);
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 {
@@ -109,23 +109,27 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	cudaStreamCreate(&stream);
 
 
-	HNS::IndexFloatGrid toSample;
+	HNS::GridIndexedData<uint32_t> data;
 	{
 		ScopedTimer t("Extracting data from OpenVDB");
-		HNS::extractToGlobalIdx(BGrid[0], AGrid[0], toSample);
+
+		HNS::IndexGridBuilder<openvdb::FloatGrid> builder(AGrid[0], data);
+		builder.addGrid(BGrid[0], "velocity");
+		builder.build();
 	}
 
 	{
 		ScopedTimer timer("NanoVDB conversion");
 		nanovdb::GridHandle<BufferT> idxHandle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*AGrid[0], 1u, false , false, 0);
 
-		// auto idxHandle = nanovdb::tools::openToNanoVDB<SrcGridT, DstBuildT, BufferT>(*AGrid[0], 1u, false, false, 0);
 		idxHandle.deviceUpload(stream, false);
-		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>(); // get a (raw) pointer to a NanoVDB grid of value type float on the GPU
+		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>();
 
-		launch_kernels(gpuGrid, toSample, stream); // Call a host method to print a grid value on both the CPU and GPU
+		auto size = data.size();
+		auto vel = data.getValueBlock<openvdb::Vec3f>("velocity");
+		launch_kernels(gpuGrid, vel->data(), size, stream);
 
-		cudaStreamDestroy(stream); // Destroy the CUDA stream
+		cudaStreamDestroy(stream);
 	}
 
 	/*

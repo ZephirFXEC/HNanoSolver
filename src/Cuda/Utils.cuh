@@ -141,10 +141,10 @@ struct CudaResources<CoordT, ValueT, false> {
 		cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues(), in_data.size * sizeof(ValueInT), cudaMemcpyHostToDevice, stream));
 	}
 
-	__host__ void LoadPointData(const HNS::IndexFloatGrid& in_data, const cudaStream_t& stream) const {
+	__host__ void LoadPointData(const HNS::GridIndexedData<uint32_t>& in_data, const cudaStream_t& stream) const {
 		// Copy data from host to device asynchronously
-		cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size * sizeof(CoordT), cudaMemcpyHostToDevice, stream));
-		cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues(), in_data.size * sizeof(float), cudaMemcpyHostToDevice, stream));
+		cudaCheck(cudaMemcpyAsync(d_coords, in_data.pCoords(), in_data.size() * sizeof(CoordT), cudaMemcpyHostToDevice, stream));
+		cudaCheck(cudaMemcpyAsync(d_values, in_data.pValues<ValueT>("density"), in_data.size() * sizeof(ValueT), cudaMemcpyHostToDevice, stream));
 	}
 
 	__host__ void LoadPointCoord(const openvdb::Coord* in_data, const size_t size, const cudaStream_t& stream) const {

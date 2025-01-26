@@ -236,13 +236,10 @@ using FloatGrid = GenericGrid<CoordType, float>;
 template <typename CoordType>
 using VectorGrid = GenericGrid<CoordType, nanovdb::Vec3f>;
 
-
 using OpenFloatGrid = OpenGrid<float>;
 using OpenVectorGrid = OpenGrid<openvdb::Vec3f>;
 using NanoFloatGrid = NanoGrid<float>;
 using NanoVectorGrid = NanoGrid<nanovdb::Vec3f>;
-
-using IndexFloatGrid = GenericGrid<uint32_t, float>;
 
 
 }  // namespace HNS

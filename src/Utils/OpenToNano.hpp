@@ -6,46 +6,131 @@
 
 #include <openvdb/openvdb.h>
 #include <tbb/tbb.h>
+#include <utility>
 
 #include "GridData.hpp"
 
-
-// iterate over openvdb grid
-// launch a kernel with the [pos, value] pairs
-// use cudaVoxelToGrid to write to nanovdb grid
-// ... calculations
-// write back to a [pos, value] to build openvdb grid
-
-// see : https://github.com/danrbailey/siggraph2023_openvdb/blob/master/benchmarks/cloud_value_clamp/main.cpp
-// for Multi-threaded OpenVDB iteration
-
 namespace HNS {
 
-inline void extractFromGridIJK(const openvdb::VectorGrid::ConstPtr& domain, const openvdb::FloatGrid::ConstPtr& grid,
-                               OpenGrid<float>& out_data) {
-	const openvdb::VectorTree& domain_topology = domain->tree();
-	const openvdb::FloatTree& grid_topology = grid->tree();
+template <typename GridT>
+class IndexGridBuilder {
+   public:
+	explicit IndexGridBuilder(typename GridT::ConstPtr domain, GridIndexedData<uint32_t>& data)
+	    : m_domainGrid(std::move(domain)), m_outData(data) {
+		if (!m_domainGrid) {
+			throw std::runtime_error("IndexGridBuilder: domain grid is null!");
+		}
 
-	out_data.allocateCudaPinned(domain_topology.activeVoxelCount());
-
-	openvdb::tree::ValueAccessor<const openvdb::VectorTree> accessor_domain(domain_topology);
-	const openvdb::tree::ValueAccessor<const openvdb::FloatTree> accessor_grid(grid_topology);
-
-	openvdb::Coord* coords = out_data.pCoords();
-	float* values = out_data.pValues();
-
-	for (auto iter = domain_topology.cbeginValueOn(); iter; ++iter) {
-		const openvdb::Coord coord = iter.getCoord();
-		const size_t idx = (coord[0] & 7) << 6 | (coord[1] & 7) << 3 | coord[2] & 7;
-
-		coords[idx] = coord;
-		values[idx] = accessor_grid.getValue(coord);
+		computeLeafs();
+		m_outData.allocateCoords(m_totalVoxels, AllocationType::CudaPinned);
 	}
-}
 
+	void addGrid(openvdb::GridBase::Ptr grid, const std::string& name) {
+		if (!grid) {
+			throw std::runtime_error("IndexGridBuilder: grid is null!");
+		}
+		m_grids.emplace_back(std::move(grid), name);
+	}
+
+	void build() {
+		for (const auto& [grid, name] : m_grids) {
+			if (auto floatGrid = openvdb::gridPtrCast<openvdb::FloatGrid>(grid)) {
+				m_outData.addValueBlock<float>(name, AllocationType::CudaPinned, m_totalVoxels);
+			} else if (auto vecGrid = openvdb::gridPtrCast<openvdb::VectorGrid>(grid)) {
+				m_outData.addValueBlock<openvdb::Vec3f>(name, AllocationType::CudaPinned, m_totalVoxels);
+			} else {
+				throw std::runtime_error("IndexGridBuilder: unsupported grid type!");
+			}
+		}
+
+		using TreeType = typename GridT::TreeType;
+		const TreeType& tree = m_domainGrid->tree();
+		const openvdb::tree::LeafManager<const TreeType> leafManager(tree);
+		const size_t numLeaves = leafManager.leafCount();
+
+		parallel_for(tbb::blocked_range<size_t>(0, numLeaves), [&](const tbb::blocked_range<size_t>& range) {
+			for (size_t i = range.begin(); i != range.end(); ++i) {
+
+				const auto& leaf = leafManager.leaf(i);
+				const size_t leafBaseOffset = m_leafOffsets[i];
+				size_t localIdx = 0;
+
+				for (auto iter = leaf.cbeginValueOn(); iter.test(); ++iter) {
+
+					const size_t outIdx = leafBaseOffset + localIdx;
+
+					m_outData.pCoords()[outIdx] = static_cast<uint32_t>(outIdx);
+
+					const openvdb::Coord& c = iter.getCoord();
+
+					for (const auto& [grid, name] : m_grids) {
+						if (const auto floatGrid = openvdb::gridConstPtrCast<openvdb::FloatGrid>(grid)) {
+							m_outData.pValues<float>(name)[outIdx] = floatGrid->tree().getValue(c);
+						} else if (const auto vec3Grid = openvdb::gridConstPtrCast<openvdb::VectorGrid>(grid)) {
+							m_outData.pValues<openvdb::Vec3f>(name)[outIdx] = vec3Grid->tree().getValue(c);
+						}
+					}
+					++localIdx;
+				}
+			}
+		});
+	}
+
+
+   private:
+	void computeLeafs() {
+
+		using TreeType = typename GridT::TreeType;
+		const TreeType& tree = m_domainGrid->tree();
+		const openvdb::tree::LeafManager<const TreeType> leafManager(tree);
+		const size_t numLeaves = leafManager.leafCount();
+
+		m_leafVoxelCounts = static_cast<size_t*>(malloc(numLeaves * sizeof(size_t)));
+		m_leafOffsets = static_cast<size_t*>(malloc((numLeaves + 1) * sizeof(size_t)));
+
+		m_totalVoxels = parallel_reduce(
+		    tbb::blocked_range<size_t>(0, numLeaves), static_cast<size_t>(0),
+		    [&](const tbb::blocked_range<size_t>& r, size_t init) {
+			    for (size_t i = r.begin(); i != r.end(); ++i) {
+				    const auto& leaf = leafManager.leaf(i);
+				    const size_t count = leaf.onVoxelCount();
+				    m_leafVoxelCounts[i] = count;
+				    init += count;
+			    }
+			    return init;
+		    },
+		    std::plus<>());
+
+		parallel_scan(
+		    tbb::blocked_range<size_t>(0, numLeaves), static_cast<size_t>(0),
+		    [&](const tbb::blocked_range<size_t>& r, size_t sum, const bool isFinal) {
+			    for (size_t i = r.begin(); i != r.end(); ++i) {
+				    const size_t count = m_leafVoxelCounts[i];
+				    if (isFinal) {
+					    m_leafOffsets[i] = sum;
+				    }
+				    sum += count;
+			    }
+			    if (isFinal && r.end() == numLeaves) {
+				    m_leafOffsets[numLeaves] = sum;
+			    }
+			    return sum;
+		    },
+		    std::plus<>());
+	}
+
+	typename GridT::ConstPtr m_domainGrid;
+	size_t* m_leafVoxelCounts = nullptr;
+	size_t* m_leafOffsets = nullptr;
+	size_t m_totalVoxels = 0;
+	size_t m_numLeaves = 0;
+	GridIndexedData<uint32_t>& m_outData;
+
+	std::vector<std::pair<openvdb::GridBase::Ptr, std::string>> m_grids;
+};
 
 inline void extractToGlobalIdx(const openvdb::VectorGrid::ConstPtr& domain, const openvdb::FloatGrid::ConstPtr& grid,
-                               IndexFloatGrid& out_data) {
+                               GridIndexedData<uint32_t>& out_data) {
 	using DomainTree = openvdb::VectorGrid::TreeType;
 	using DomainLeafNode = DomainTree::LeafNodeType;
 
@@ -71,7 +156,6 @@ inline void extractToGlobalIdx(const openvdb::VectorGrid::ConstPtr& domain, cons
 		    return init;
 	    },
 	    std::plus<>());
-	out_data.size = totalVoxels;
 
 	// compute leafOffsets
 	tbb::parallel_scan(
@@ -91,7 +175,9 @@ inline void extractToGlobalIdx(const openvdb::VectorGrid::ConstPtr& domain, cons
 	    },
 	    std::plus<>());
 
-	out_data.allocateCudaPinned(totalVoxels);
+	out_data.addValueBlock<float>(grid->getName(), AllocationType::CudaPinned, totalVoxels);
+	out_data.addValueBlock<openvdb::Vec3f>(domain->getName(), AllocationType::CudaPinned, totalVoxels);
+	out_data.allocateCoords(totalVoxels, AllocationType::CudaPinned);
 
 	// iterate each leaf in domain, gather voxel coords + values
 	tbb::parallel_for(tbb::blocked_range<size_t>(0, numLeaves), [&](const tbb::blocked_range<size_t>& range) {
@@ -116,9 +202,11 @@ inline void extractToGlobalIdx(const openvdb::VectorGrid::ConstPtr& domain, cons
 				// Retrieve the float value from 'grid' at the same coordinate
 				const openvdb::Coord& c = iter.getCoord();
 				const float val = grid->tree().getValue(c);
+				const openvdb::Vec3f vec = domain->tree().getValue(c);
 
 				// Write it to out_data.values
-				out_data.pValues()[outIdx] = val;
+				out_data.pValues<float>(grid->getName())[outIdx] = val;
+				out_data.pValues<openvdb::Vec3f>(domain->getName())[outIdx] = vec;
 
 				++localIdx;
 			}

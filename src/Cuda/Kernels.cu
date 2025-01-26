@@ -12,7 +12,7 @@
 #include "../Utils/OpenToNano.hpp"
 #include "utils.cuh"
 
-__global__ void gpu_kernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, const float* data) {
+__global__ void gpu_kernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, const nanovdb::Vec3f* data) {
 
 	const nanovdb::ChannelAccessor<float, nanovdb::ValueOnIndex> acc(*gpuGrid);
 
@@ -31,30 +31,35 @@ __global__ void gpu_kernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGr
 	printf("Idx at Coord 0,1,0 : %u\n", idx010);
 	printf("Idx at Coord 0,0,1 : %u\n", idx001);
 
-	/*printf("Sampling Velocity Grid : ");
-	printf("Vel at : %u =  %f%f%f\n", idx000, acc(0, 0, 0)[0], acc(0, 0, 0)[1], acc(0, 0, 0)[2]);
-	printf("Vel at : %u =  %f%f%f\n", idx100, acc(1, 0, 0)[0], acc(1, 0, 0)[1], acc(1, 0, 0)[2]);
-	printf("Vel at : %u =  %f%f%f\n", idx010, acc(0, 1, 0)[0], acc(0, 1, 0)[1], acc(0, 1, 0)[2]);
-	printf("Vel at : %u =  %f%f%f\n", idx001, acc(0, 0, 1)[0], acc(0, 0, 1)[1], acc(0, 0, 1)[2]);
+	printf("Sampling Density Grid : \n");
+	printf("Density at : %u =  %f\n", idx000, acc(0, 0, 0));
+	printf("Density at : %u =  %f\n", idx100, acc(1, 0, 0));
+	printf("Density at : %u =  %f\n", idx010, acc(0, 1, 0));
+	printf("Density at : %u =  %f\n", idx001, acc(0, 0, 1));
 
-	printf("Sampling Density Grid : ");
-	printf("Density at : %u =  %f\n", idx000, 0.0f);
-	printf("Density at : %u =  %f\n", idx100, 0.0f);
-	printf("Density at : %u =  %f\n", idx010, 0.0f);
-	printf("Density at : %u =  %f\n", idx001, 0.0f);*/
+	const nanovdb::Vec3f vel000 = data[idx000];
+	const nanovdb::Vec3f vel100 = data[idx100];
+	const nanovdb::Vec3f vel010 = data[idx010];
+	const nanovdb::Vec3f vel001 = data[idx001];
 
+	printf("Sampling Velocity Grid : \n");
+	printf("Velocity at : %u =  {%f, %f, %f}\n", idx000, vel000[0], vel000[1], vel000[2]);
+	printf("Velocity at : %u =  {%f, %f, %f}\n", idx100, vel100[0], vel100[1], vel100[2]);
+	printf("Velocity at : %u =  {%f, %f, %f}\n", idx010, vel010[0], vel010[1], vel010[2]);
+	printf("Velocity at : %u =  {%f, %f, %f}\n", idx001, vel001[0], vel001[1], vel001[2]);
 }
 
 
 
 // This is called by the client code on the host
-extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, HNS::IndexFloatGrid& toSample,
+extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, void* data, size_t size, const
                                cudaStream_t stream) {
 
-	//const CudaResources<uint32_t, float, false> res(toSample.size, stream);
-	//res.LoadPointData(toSample, stream);
+	nanovdb::Vec3f* vel = nullptr;
+	cudaMalloc(&vel, size * sizeof(openvdb::Vec3f));
+	cudaMemcpy(vel, data, size * sizeof(openvdb::Vec3f), cudaMemcpyHostToDevice);
 
-	gpu_kernel<<<1, 1, 0, stream>>>(gpuGrid, nullptr); //res.d_values);  // Launch the device kernel asynchronously
+	gpu_kernel<<<1, 1, 0, stream>>>(gpuGrid, vel); //res.d_values);  // Launch the device kernel asynchronously
 }
 
 
