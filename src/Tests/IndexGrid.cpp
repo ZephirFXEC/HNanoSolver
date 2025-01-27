@@ -2,20 +2,163 @@
 // Created by zphrfx on 25/01/2025.
 //
 
+#define NANOVDB_USE_OPENVDB
 
 #include <gtest/gtest.h>
+#include <nanovdb/tools/CreateNanoGrid.h>
 #include <openvdb/openvdb.h>
 
+#include "Utils/GridBuilder.hpp"
 #include "Utils/GridData.hpp"
-#include "Utils/OpenToNano.hpp"
+#include "Utils/Stencils.hpp"
+
 
 struct Vec3f {
 	float x, y, z;
 };
 
 
-TEST(GridIndexedDataTest, IndexGridBuilder) {
+TEST(GridIndexedDataTest, TrilinearSampler) {
+	openvdb::FloatGrid::Ptr gridPtr = openvdb::FloatGrid::create();
+	gridPtr->setName("density");
+	gridPtr->setGridClass(openvdb::GRID_FOG_VOLUME);
+	gridPtr->setTransform(openvdb::math::Transform::createLinearTransform(1.0f));
 
+
+	for (size_t i = 0; i < 15; ++i) {
+		gridPtr->getAccessor().setValue(openvdb::Coord(i, 0, 0), i);
+	}
+
+	EXPECT_EQ(gridPtr->activeVoxelCount(), 15);
+
+
+	openvdb::VectorGrid::Ptr domain = openvdb::VectorGrid::create();
+	domain->setName("velocity");
+	gridPtr->setGridClass(openvdb::GRID_STAGGERED);
+
+	auto domain_acc = domain->getAccessor();
+	int i = 0;
+	for (auto iter = gridPtr->cbeginValueOn(); iter; ++iter) {
+		auto coord = iter.getCoord();
+
+		// for each coord set the neighboring coord too
+		const auto left = coord + openvdb::Coord(-1, 0, 0);
+		const auto right = coord + openvdb::Coord(1, 0, 0);
+
+		domain_acc.setValue(coord, openvdb::Vec3f(i, i, i));
+		domain_acc.setValue(left, openvdb::Vec3f(1.0f, 1.0f, 1.0f));
+		domain_acc.setValue(right, openvdb::Vec3f(1.0f, 1.0f, 1.0f));
+		i++;
+	}
+
+
+	HNS::GridIndexedData<uint32_t> indexed_data;
+	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(gridPtr, indexed_data);
+
+	builder.addGrid(gridPtr, "density");
+	builder.addGrid(domain, "velocity");
+
+	builder.build();
+
+	using SrcGridT = openvdb::FloatGrid;
+	using DstBuildT = nanovdb::ValueOnIndex;
+	using BufferT = nanovdb::HostBuffer;
+
+	nanovdb::GridHandle<BufferT> idxHandle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*gridPtr, 1u, false, false, 0);
+	auto indexGrid = idxHandle.grid<DstBuildT>();
+
+	IndexOffsetSampler<0> idxSampler(*indexGrid);
+	IndexSampler<float, 1> custom_trilinear(idxSampler);
+	auto dataf = indexed_data.pValues<float>("density");
+
+	nanovdb::ChannelAccessor<float, nanovdb::ValueOnIndex> chanAccess(*indexGrid);
+	auto nanovdb_trilinear = nanovdb::math::createSampler<1>(chanAccess);
+
+
+	for (size_t i = 0; i < indexed_data.size(); ++i) {
+
+		auto custom_val_int = custom_trilinear(nanovdb::Coord(i, 0, 0), dataf);
+		auto nano_val_int = nanovdb_trilinear(nanovdb::Coord(i, 0, 0));
+
+		EXPECT_EQ(custom_val_int, nano_val_int);
+	}
+
+	EXPECT_FLOAT_EQ(custom_trilinear(nanovdb::Vec3f(0.5, 0,0), dataf), nanovdb_trilinear(nanovdb::Vec3f(0.5, 0, 0)));
+
+	EXPECT_FLOAT_EQ(custom_trilinear(nanovdb::Vec3f(0.5, 0.25,0), dataf), nanovdb_trilinear(nanovdb::Vec3f(0.5, 0.25, 0)));
+}
+
+
+TEST(GridIndexedDataTest, IndexSampler) {
+	openvdb::FloatGrid::Ptr gridPtr = openvdb::FloatGrid::create();
+	gridPtr->setName("density");
+	gridPtr->setGridClass(openvdb::GRID_FOG_VOLUME);
+	gridPtr->setTransform(openvdb::math::Transform::createLinearTransform(1.0f));
+
+
+	for (size_t i = 0; i < 15; ++i) {
+		gridPtr->getAccessor().setValue(openvdb::Coord(i, 0, 0), i);
+	}
+
+	EXPECT_EQ(gridPtr->activeVoxelCount(), 15);
+
+
+	openvdb::VectorGrid::Ptr domain = openvdb::VectorGrid::create();
+	domain->setName("velocity");
+	gridPtr->setGridClass(openvdb::GRID_STAGGERED);
+
+	auto domain_acc = domain->getAccessor();
+	int i = 0;
+	for (auto iter = gridPtr->cbeginValueOn(); iter; ++iter) {
+		auto coord = iter.getCoord();
+
+		// for each coord set the neighboring coord too
+		const auto left = coord + openvdb::Coord(-1, 0, 0);
+		const auto right = coord + openvdb::Coord(1, 0, 0);
+
+		domain_acc.setValue(coord, openvdb::Vec3f(i, i, i));
+		domain_acc.setValue(left, openvdb::Vec3f(1.0f, 1.0f, 1.0f));
+		domain_acc.setValue(right, openvdb::Vec3f(1.0f, 1.0f, 1.0f));
+		i++;
+	}
+
+
+	HNS::GridIndexedData<uint32_t> indexed_data;
+	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(gridPtr, indexed_data);
+
+	builder.addGrid(gridPtr, "density");
+	builder.addGrid(domain, "velocity");
+
+	builder.build();
+
+	using SrcGridT = openvdb::FloatGrid;
+	using DstBuildT = nanovdb::ValueOnIndex;
+	using BufferT = nanovdb::HostBuffer;
+
+	nanovdb::GridHandle<BufferT> idxHandle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*gridPtr, 1u, false, false, 0);
+	auto indexGrid = idxHandle.grid<DstBuildT>();
+
+	IndexOffsetSampler<0> idxSampler(*indexGrid);
+
+	IndexSampler<float, 0> samplerf(idxSampler);
+	IndexSampler<openvdb::Vec3f, 0> samplerv(idxSampler);
+
+	nanovdb::ChannelAccessor<float, nanovdb::ValueOnIndex> chanAccess(*indexGrid);
+
+	for (size_t i = 0; i < indexed_data.size(); ++i) {
+		auto dataf = indexed_data.pValues<float>("density");
+		auto datav = indexed_data.pValues<openvdb::Vec3f>("velocity");
+		auto sampler_data_f = samplerf(nanovdb::Coord(i, 0, 0), dataf);
+		auto sampler_data_v = samplerv(nanovdb::Coord(i, 0, 0), datav);
+		auto nanosampler = chanAccess(i, 0, 0);
+
+		EXPECT_EQ(sampler_data_f, nanosampler);
+		EXPECT_EQ(datav[i].x(), sampler_data_v[0]);
+	}
+}
+
+
+TEST(GridIndexedDataTest, IndexGridBuilder) {
 	openvdb::FloatGrid::Ptr gridPtr = openvdb::FloatGrid::create();
 	gridPtr->setName("density");
 	gridPtr->setGridClass(openvdb::GRID_FOG_VOLUME);

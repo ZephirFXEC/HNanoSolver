@@ -20,7 +20,7 @@
 
 #include "Renderer.hpp"
 #include "Shader.hpp"
-#include "Utils/OpenToNano.hpp"
+#include "Utils/GridBuilder.hpp"
 
 extern "C" void pointToGridFloat(HNS::OpenFloatGrid& in_data, float voxelSize, HNS::NanoFloatGrid& out_data, const cudaStream_t& stream);
 

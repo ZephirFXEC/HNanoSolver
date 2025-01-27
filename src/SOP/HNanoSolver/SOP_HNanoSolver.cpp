@@ -6,7 +6,7 @@
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <openvdb/tools/VolumeAdvect.h>
 
-#include "Utils/OpenToNano.hpp"
+#include "Utils/GridBuilder.hpp"
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
 
@@ -111,7 +111,6 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 	// Encode data in the Velocity topology
 
 
-
 	HNS::OpenVectorGrid vel_out_data;
 	{
 		ScopedTimer timer("Extracting voxels from " + BGrid[0]->getName());
@@ -135,7 +134,6 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 		for (size_t i = 0; i < AGrid.size(); ++i) {
 			HNS::extractFromOpenVDB<openvdb::FloatGrid, float>(AGrid[i], gridData[i]);
 		}
-
 	}
 
 	std::vector<HNS::NanoFloatGrid> advectedData(AGrid.size());
@@ -147,7 +145,4 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 
 		AdvectFloats(gridData, velGrid, advectedData, voxelSize, deltaTime, stream);
 	}
-
-
-
 }

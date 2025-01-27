@@ -5,11 +5,7 @@
 #include <openvdb/openvdb.h>
 
 #include <cstdio>  // for printf
-#include <nanovdb/cuda/GridHandle.cuh>
-#include <nanovdb/tools/cuda/IndexToGrid.cuh>
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
-
-#include "../Utils/OpenToNano.hpp"
 #include "utils.cuh"
 
 __global__ void gpu_kernel(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, const nanovdb::Vec3f* data) {
@@ -59,30 +55,5 @@ extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* g
 	cudaMalloc(&vel, size * sizeof(openvdb::Vec3f));
 	cudaMemcpy(vel, data, size * sizeof(openvdb::Vec3f), cudaMemcpyHostToDevice);
 
-	gpu_kernel<<<1, 1, 0, stream>>>(gpuGrid, vel); //res.d_values);  // Launch the device kernel asynchronously
-}
-
-
-extern "C" void openToNanoIndex(const openvdb::FloatGrid::Ptr& in_grid, const cudaStream_t stream) {
-	const size_t voxelCount = in_grid->activeVoxelCount();
-	const openvdb::Vec3d voxelSize = in_grid->voxelSize();
-
-	// extract coords from openvdb grid
-	std::vector<nanovdb::Vec3f> coords;
-	coords.reserve(voxelCount);
-	for (auto iter = in_grid->beginValueOn(); iter; ++iter) {
-		const openvdb::Coord& coord = iter.getCoord();
-		coords.emplace_back(coord.x(), coord.y(), coord.z());
-	}
-
-	nanovdb::Vec3f* coord_d = nullptr;
-
-	cudaMalloc(&coord_d, voxelCount * sizeof(nanovdb::Vec3f));
-	cudaMemcpy(coord_d, coords.data(), voxelCount * sizeof(nanovdb::Vec3f), cudaMemcpyHostToDevice);
-
-	const nanovdb::cuda::DeviceBuffer buffer(voxelCount * sizeof(float), false, stream);
-	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
-	    nanovdb::tools::cuda::voxelsToGrid<float>(coord_d, voxelCount, voxelSize[0], buffer, stream);
-
-	const auto* gpuGrid = handle.deviceGrid<nanovdb::PointGrid>();
+	gpu_kernel<<<1, 1, 0, stream>>>(gpuGrid, vel);
 }

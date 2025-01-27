@@ -2,17 +2,6 @@
 // Created by zphrfx on 29/08/2024.
 //
 
-/* TODO: extract data from openvdb containing :
-- Values
-- Coords
-- Value[Coord] mapping
-
-then no conversion to nanovdb is needed.
-custom sampler as to be written.
-Run the kernels on the GPU
-
-export back value / coord to the CPU to build the grid.
-*/
 
 #define NANOVDB_USE_OPENVDB
 
@@ -23,10 +12,10 @@ export back value / coord to the CPU to build the grid.
 #include <nanovdb/cuda/DeviceBuffer.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 
-#include "Utils/OpenToNano.hpp"
+#include "Utils/GridBuilder.hpp"
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
-
+#include "Utils/Stencils.hpp"
 
 
 extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>*, void* data, size_t size, cudaStream_t stream);

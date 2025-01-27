@@ -44,10 +44,11 @@ add_subdirectory(src/HNanoViewer)
 add_library(Utils STATIC
         src/Utils/Utils.cpp
         src/Utils/ScopedTimer.hpp
-        src/Utils/OpenToNano.hpp
+        src/Utils/GridBuilder.hpp
         src/Utils/GridData.hpp
         src/Utils/Memory.hpp
         src/Utils/Utils.hpp
+        src/Utils/Stencils.hpp
 )
 target_link_libraries(Utils PRIVATE HoudiniVDB)
 

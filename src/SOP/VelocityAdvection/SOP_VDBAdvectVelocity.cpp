@@ -6,7 +6,7 @@
 #include <UT/UT_DSOVersion.h>
 #include <tbb/enumerable_thread_specific.h>
 
-#include "Utils/OpenToNano.hpp"
+#include "Utils/GridBuilder.hpp"
 #include "Utils/ScopedTimer.hpp"
 #include "Utils/Utils.hpp"
 
