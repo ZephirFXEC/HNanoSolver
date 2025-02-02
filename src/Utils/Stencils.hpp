@@ -4,7 +4,26 @@
 
 #pragma once
 
-#include <nanovdb/math/SampleFromVoxels.h>
+// Only define __hostdev__ when compiling as NVIDIA CUDA
+#if defined(__CUDACC__) || defined(__HIP__)
+#define __hostdev__ __host__ __device__
+#else
+#include <cmath> // for floor
+#define __hostdev__
+#endif
+
+#include <nanovdb/math/Math.h>
+
+
+template<template<typename> class Vec3T>
+__hostdev__ inline nanovdb::Coord Floor(Vec3T<float>& xyz)
+{
+	const float ijk[3] = {floorf(xyz[0]), floorf(xyz[1]), floorf(xyz[2])};
+	xyz[0] -= ijk[0];
+	xyz[1] -= ijk[1];
+	xyz[2] -= ijk[2];
+	return nanovdb::Coord(int32_t(ijk[0]), int32_t(ijk[1]), int32_t(ijk[2]));
+}
 
 template <int Order>
 class IndexOffsetSampler;
@@ -55,7 +74,7 @@ class TrilinearSampler {
 
 	[[nodiscard]] const IndexOffsetSampler<0>& Acc() const { return mOffsetSampler; }
 
-	void stencil(nanovdb::Coord ijk, ValueT (&v)[2][2][2], const ValueT* data) const {
+	void stencil(nanovdb::Coord& ijk, ValueT (&v)[2][2][2], const ValueT* data) const {
 		// (i,   j,   k)
 		v[0][0][0] = data[mOffsetSampler.offset(ijk)];
 
@@ -114,8 +133,7 @@ class IndexSampler<ValueT, 1> : public TrilinearSampler<ValueT> {
 	__hostdev__ ValueT operator()(Vec3T<RealT> xyz, const ValueT* data) const {
 
 		this->cache(xyz, data);
-		Vec3T<RealT> frac(xyz[0] - mPos.x(), xyz[1] - mPos.y(), xyz[2] - mPos.z());
-		return BaseT::sample(frac, mValues);
+		return BaseT::sample(xyz, mValues);
 	}
 
 	__hostdev__ ValueT operator()(const nanovdb::Coord& ijk, const ValueT* data) const {
@@ -129,7 +147,7 @@ class IndexSampler<ValueT, 1> : public TrilinearSampler<ValueT> {
 
 	template <typename RealT, template <typename...> class Vec3T>
 	__hostdev__ void cache(Vec3T<RealT>& xyz, const ValueT* data) const {
-		if (nanovdb::Coord ijk = nanovdb::math::Floor<nanovdb::Coord>(xyz); ijk != mPos) {
+		if (nanovdb::Coord ijk = Floor(xyz); ijk != mPos) {
 			mPos = ijk;
 			BaseT::stencil(ijk, mValues, data);
 		}

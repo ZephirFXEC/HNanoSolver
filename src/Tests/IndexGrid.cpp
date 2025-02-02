@@ -5,6 +5,7 @@
 #define NANOVDB_USE_OPENVDB
 
 #include <gtest/gtest.h>
+#include <nanovdb/math/SampleFromVoxels.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <openvdb/openvdb.h>
 
@@ -84,8 +85,7 @@ TEST(GridIndexedDataTest, TrilinearSampler) {
 	}
 
 	EXPECT_FLOAT_EQ(custom_trilinear(nanovdb::Vec3f(0.5, 0,0), dataf), nanovdb_trilinear(nanovdb::Vec3f(0.5, 0, 0)));
-
-	EXPECT_FLOAT_EQ(custom_trilinear(nanovdb::Vec3f(0.5, 0.25,0), dataf), nanovdb_trilinear(nanovdb::Vec3f(0.5, 0.25, 0)));
+	EXPECT_FLOAT_EQ(custom_trilinear(nanovdb::Vec3f(1.25, 0,0), dataf), nanovdb_trilinear(nanovdb::Vec3f(1.25, 0, 0)));
 }
 
 
