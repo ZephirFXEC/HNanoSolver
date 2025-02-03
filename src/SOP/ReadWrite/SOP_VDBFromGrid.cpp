@@ -18,7 +18,7 @@
 #include "Utils/Stencils.hpp"
 
 
-extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>*, void* data, size_t size, cudaStream_t stream);
+extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>*, void* vel, void* density, size_t size, cudaStream_t stream);
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 {
@@ -97,12 +97,21 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
 
+	// merge topolgy
+
+	openvdb::FloatGrid::Ptr domain = openvdb::createGrid<openvdb::FloatGrid>();
+	{
+		ScopedTimer t("Merging topology");
+		domain->topologyUnion(*AGrid[0]);
+		domain->topologyUnion(*BGrid[0]);
+	}
 
 	HNS::GridIndexedData<uint32_t> data;
 	{
 		ScopedTimer t("Extracting data from OpenVDB");
 
-		HNS::IndexGridBuilder<openvdb::FloatGrid> builder(AGrid[0], data);
+		HNS::IndexGridBuilder<SrcGridT> builder(domain, data);
+		builder.addGrid(AGrid[0], "density");
 		builder.addGrid(BGrid[0], "velocity");
 		builder.build();
 	}
@@ -115,8 +124,10 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>();
 
 		auto size = data.size();
-		auto vel = data.getValueBlock<openvdb::Vec3f>("velocity");
-		launch_kernels(gpuGrid, vel->data(), size, stream);
+		auto density = data.getValueBlock<float>("density");
+		auto velocity = data.getValueBlock<openvdb::Vec3f>("velocity");
+
+		launch_kernels(gpuGrid, velocity->data(), density->data(), size, stream);
 
 		cudaStreamDestroy(stream);
 	}

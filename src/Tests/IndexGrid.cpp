@@ -69,8 +69,7 @@ TEST(GridIndexedDataTest, TrilinearSampler) {
 	auto indexGrid = idxHandle.grid<DstBuildT>();
 
 	IndexOffsetSampler<0> idxSampler(*indexGrid);
-	IndexSampler<float, 1> custom_trilinear(idxSampler);
-	auto dataf = indexed_data.pValues<float>("density");
+	IndexSampler<float, 1> custom_trilinear(idxSampler, indexed_data.pValues<float>("density"));
 
 	nanovdb::ChannelAccessor<float, nanovdb::ValueOnIndex> chanAccess(*indexGrid);
 	auto nanovdb_trilinear = nanovdb::math::createSampler<1>(chanAccess);
@@ -78,14 +77,14 @@ TEST(GridIndexedDataTest, TrilinearSampler) {
 
 	for (size_t i = 0; i < indexed_data.size(); ++i) {
 
-		auto custom_val_int = custom_trilinear(nanovdb::Coord(i, 0, 0), dataf);
+		auto custom_val_int = custom_trilinear(nanovdb::Coord(i, 0, 0));
 		auto nano_val_int = nanovdb_trilinear(nanovdb::Coord(i, 0, 0));
 
 		EXPECT_EQ(custom_val_int, nano_val_int);
 	}
 
-	EXPECT_FLOAT_EQ(custom_trilinear(nanovdb::Vec3f(0.5, 0,0), dataf), nanovdb_trilinear(nanovdb::Vec3f(0.5, 0, 0)));
-	EXPECT_FLOAT_EQ(custom_trilinear(nanovdb::Vec3f(1.25, 0,0), dataf), nanovdb_trilinear(nanovdb::Vec3f(1.25, 0, 0)));
+	EXPECT_FLOAT_EQ(custom_trilinear(nanovdb::Vec3f(0.5, 0,0)), nanovdb_trilinear(nanovdb::Vec3f(0.5, 0, 0)));
+	EXPECT_FLOAT_EQ(custom_trilinear(nanovdb::Vec3f(1.25, 0,0)), nanovdb_trilinear(nanovdb::Vec3f(1.25, 0, 0)));
 }
 
 

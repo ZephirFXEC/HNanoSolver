@@ -39,7 +39,7 @@ class IndexOffsetSampler<0> {
 	__hostdev__ explicit IndexOffsetSampler(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>& grid) : mAcc(grid) {}
 
 	__hostdev__ [[nodiscard]] uint64_t offset(const int i, const int j, const int k) const { return mAcc.idx(i, j, k) - 1; }
-	__hostdev__ [[nodiscard]] uint64_t offset(nanovdb::Coord ijk) const { return mAcc.idx(ijk[0], ijk[1], ijk[2]) - 1; }
+	__hostdev__ [[nodiscard]] uint64_t offset(nanovdb::Coord ijk) const { return offset(ijk[0], ijk[1], ijk[2]); }
 
    private:
 	AccessorT mAcc;
@@ -74,7 +74,7 @@ class TrilinearSampler {
 
 	[[nodiscard]] const IndexOffsetSampler<0>& Acc() const { return mOffsetSampler; }
 
-	void stencil(nanovdb::Coord& ijk, ValueT (&v)[2][2][2], const ValueT* data) const {
+	__hostdev__ void stencil(nanovdb::Coord& ijk, ValueT (&v)[2][2][2], const ValueT* data) const {
 		// (i,   j,   k)
 		v[0][0][0] = data[mOffsetSampler.offset(ijk)];
 
@@ -125,25 +125,24 @@ class IndexSampler<ValueT, 1> : public TrilinearSampler<ValueT> {
 	using BaseT = TrilinearSampler<ValueT>;
 
    public:
-	__hostdev__ explicit IndexSampler(const IndexOffsetSampler<0>& offsetSampler)
-	    : BaseT(offsetSampler), mPos(nanovdb::Coord::max()), mValues() {}
+	__hostdev__ explicit IndexSampler(const IndexOffsetSampler<0>& offsetSampler, const ValueT* data)
+	    : BaseT(offsetSampler), mPos(nanovdb::Coord::max()), mValues(), mData(data) {}
 
 
 	template <typename RealT, template <typename...> class Vec3T>
-	__hostdev__ ValueT operator()(Vec3T<RealT> xyz, const ValueT* data) const {
-
-		this->cache(xyz, data);
+	__hostdev__ ValueT operator()(Vec3T<RealT> xyz) const {
+		this->cache(xyz, mData);
 		return BaseT::sample(xyz, mValues);
 	}
 
-	__hostdev__ ValueT operator()(const nanovdb::Coord& ijk, const ValueT* data) const {
-		return ijk == mPos ? mValues[0][0][0] : data[BaseT::Acc().offset(ijk)];
+	__hostdev__ ValueT operator()(const nanovdb::Coord& ijk) const {
+		return ijk == mPos ? mValues[0][0][0] : mData[BaseT::Acc().offset(ijk)];
 	}
-
 
    private:
 	mutable nanovdb::Coord mPos;
 	mutable ValueT mValues[2][2][2];
+	const ValueT* mData;
 
 	template <typename RealT, template <typename...> class Vec3T>
 	__hostdev__ void cache(Vec3T<RealT>& xyz, const ValueT* data) const {
