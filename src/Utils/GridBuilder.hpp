@@ -6,16 +6,17 @@
 
 #include <openvdb/openvdb.h>
 #include <tbb/tbb.h>
+
 #include <utility>
 
 #include "GridData.hpp"
 
 namespace HNS {
 
-template <typename GridT>
+template <typename DomainGridT>
 class IndexGridBuilder {
    public:
-	explicit IndexGridBuilder(typename GridT::ConstPtr domain, GridIndexedData<uint32_t>& data)
+	explicit IndexGridBuilder(typename DomainGridT::ConstPtr domain, GridIndexedData<uint32_t>& data)
 	    : m_domainGrid(std::move(domain)), m_outData(data) {
 		if (!m_domainGrid) {
 			throw std::runtime_error("IndexGridBuilder: domain grid is null!");
@@ -36,7 +37,7 @@ class IndexGridBuilder {
 		for (const auto& [grid, name] : m_grids) {
 			if (const auto floatGrid = openvdb::gridPtrCast<openvdb::FloatGrid>(grid)) {
 				m_outData.addValueBlock<float>(name, AllocationType::CudaPinned, m_totalVoxels);
-				auto& floatTree = floatGrid->tree();  // reference
+				auto& floatTree = floatGrid->tree();
 				float* outPtr = m_outData.pValues<float>(name);
 				m_samplers.emplace_back(
 				    [outPtr, &floatTree](const openvdb::Coord& c, const size_t idx) { outPtr[idx] = floatTree.getValue(c); });
@@ -51,7 +52,7 @@ class IndexGridBuilder {
 			}
 		}
 
-		using TreeType = typename GridT::TreeType;
+		using TreeType = typename DomainGridT::TreeType;
 		const TreeType& tree = m_domainGrid->tree();
 		const openvdb::tree::LeafManager<const TreeType> leafManager(tree);
 		const size_t numLeaves = leafManager.leafCount();
@@ -80,18 +81,63 @@ class IndexGridBuilder {
 	}
 
 
+	template <typename GridT, typename ValueT = std::conditional_t<std::is_same_v<GridT, openvdb::FloatGrid>, float, openvdb::Vec3f>>
+	typename GridT::Ptr writeIndexGrid(const std::string& name, const float voxelSize) {
+		typename GridT::Ptr grid = GridT::create();
+		grid->setName(name);
+		grid->setTransform(openvdb::math::Transform::createLinearTransform(voxelSize));
+
+		if (std::is_same_v<GridT, openvdb::FloatGrid>) {
+			grid->setGridClass(openvdb::GRID_FOG_VOLUME);
+		} else if (std::is_same_v<GridT, openvdb::VectorGrid>) {
+			grid->setGridClass(openvdb::GRID_STAGGERED);
+			grid->setVectorType(openvdb::VEC_CONTRAVARIANT_RELATIVE);
+		} else {
+			throw std::runtime_error("IndexGridBuilder: unsupported grid type!");
+		}
+
+		auto& tree = grid->tree();
+		openvdb::tree::ValueAccessor<typename GridT::TreeType> accessor(tree);
+		const openvdb::tree::LeafManager<const typename DomainGridT::TreeType> leafManager(m_domainGrid->tree());
+
+		if (m_totalVoxels != m_outData.size()) {
+			throw std::runtime_error("Mismatch between domain grid active voxel count and index grid data size");
+		}
+
+		const auto* data = m_outData.pValues<ValueT>(name);
+
+		for (size_t leafIdx = 0; leafIdx < m_numLeaves; ++leafIdx) {
+			const auto& leaf = leafManager.leaf(leafIdx);
+			const size_t leafBaseOffset = m_leafOffsets[leafIdx];
+			size_t localIndex = 0;
+
+			for (auto iter = leaf.cbeginValueOn(); iter; ++iter) {
+				const size_t globalIndex = leafBaseOffset + localIndex;
+				const openvdb::Coord& coord = iter.getCoord();
+
+				accessor.setValue(coord, data[globalIndex]);
+				++localIndex;
+			}
+		}
+
+		grid->tree().prune();
+
+		return grid;
+	}
+
+
    private:
 	void computeLeafs() {
-		using TreeType = typename GridT::TreeType;
+		using TreeType = typename DomainGridT::TreeType;
 		const TreeType& tree = m_domainGrid->tree();
 		const openvdb::tree::LeafManager<const TreeType> leafManager(tree);
-		const size_t numLeaves = leafManager.leafCount();
+		m_numLeaves = leafManager.leafCount();
 
-		m_leafVoxelCounts = static_cast<size_t*>(malloc(numLeaves * sizeof(size_t)));
-		m_leafOffsets = static_cast<size_t*>(malloc((numLeaves + 1) * sizeof(size_t)));
+		m_leafVoxelCounts = static_cast<size_t*>(malloc(m_numLeaves * sizeof(size_t)));
+		m_leafOffsets = static_cast<size_t*>(malloc((m_numLeaves + 1) * sizeof(size_t)));
 
 		m_totalVoxels = parallel_reduce(
-		    tbb::blocked_range<size_t>(0, numLeaves), static_cast<size_t>(0),
+		    tbb::blocked_range<size_t>(0, m_numLeaves), static_cast<size_t>(0),
 		    [&](const tbb::blocked_range<size_t>& r, size_t init) {
 			    for (size_t i = r.begin(); i != r.end(); ++i) {
 				    const auto& leaf = leafManager.leaf(i);
@@ -104,7 +150,7 @@ class IndexGridBuilder {
 		    std::plus<>());
 
 		parallel_scan(
-		    tbb::blocked_range<size_t>(0, numLeaves), static_cast<size_t>(0),
+		    tbb::blocked_range<size_t>(0, m_numLeaves), static_cast<size_t>(0),
 		    [&](const tbb::blocked_range<size_t>& r, size_t sum, const bool isFinal) {
 			    for (size_t i = r.begin(); i != r.end(); ++i) {
 				    const size_t count = m_leafVoxelCounts[i];
@@ -113,15 +159,15 @@ class IndexGridBuilder {
 				    }
 				    sum += count;
 			    }
-			    if (isFinal && r.end() == numLeaves) {
-				    m_leafOffsets[numLeaves] = sum;
+			    if (isFinal && r.end() == m_numLeaves) {
+				    m_leafOffsets[m_numLeaves] = sum;
 			    }
 			    return sum;
 		    },
 		    std::plus<>());
 	}
 
-	typename GridT::ConstPtr m_domainGrid;
+	typename DomainGridT::ConstPtr m_domainGrid;
 	size_t* m_leafVoxelCounts = nullptr;
 	size_t* m_leafOffsets = nullptr;
 	size_t m_totalVoxels = 0;

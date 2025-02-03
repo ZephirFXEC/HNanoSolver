@@ -14,8 +14,8 @@
 
 #include "Utils/GridBuilder.hpp"
 #include "Utils/ScopedTimer.hpp"
-#include "Utils/Utils.hpp"
 #include "Utils/Stencils.hpp"
+#include "Utils/Utils.hpp"
 
 
 extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>*, void* vel, void* density, size_t size, cudaStream_t stream);
@@ -89,10 +89,9 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	}
 
 
-
-	using SrcGridT  = openvdb::FloatGrid;
+	using SrcGridT = openvdb::FloatGrid;
 	using DstBuildT = nanovdb::ValueOnIndex;
-	using BufferT   = nanovdb::cuda::DeviceBuffer;
+	using BufferT = nanovdb::cuda::DeviceBuffer;
 
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
@@ -107,10 +106,10 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	}
 
 	HNS::GridIndexedData<uint32_t> data;
+	HNS::IndexGridBuilder<SrcGridT> builder(domain, data);
 	{
 		ScopedTimer t("Extracting data from OpenVDB");
 
-		HNS::IndexGridBuilder<SrcGridT> builder(domain, data);
 		builder.addGrid(AGrid[0], "density");
 		builder.addGrid(BGrid[0], "velocity");
 		builder.build();
@@ -118,7 +117,8 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 
 	{
 		ScopedTimer timer("NanoVDB conversion");
-		nanovdb::GridHandle<BufferT> idxHandle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*AGrid[0], 1u, false , false, 0);
+		nanovdb::GridHandle<BufferT> idxHandle =
+		    nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*AGrid[0], 1u, false, false, 0);
 
 		idxHandle.deviceUpload(stream, false);
 		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>();
@@ -132,16 +132,19 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		cudaStreamDestroy(stream);
 	}
 
-	/*
+
 	{
-		ScopedTimer timer("OpenVDB To NanoVDB Index Cuda");
+		ScopedTimer timer("Building Grids");
 
-		cudaStream_t stream;
-		cudaStreamCreate(&stream);
 
-		openToNanoIndex(AGrid[0], stream);
-
-		cudaStreamDestroy(stream); // Destroy the CUDA stream
+		tbb::parallel_invoke(
+		    [&] {
+			    const auto density = builder.writeIndexGrid<openvdb::FloatGrid>("density", AGrid[0]->voxelSize()[0]);
+			    GU_PrimVDB::buildFromGrid(*detail, density, nullptr, density->getName().c_str());
+		    },
+		    [&] {
+			    const auto velocity = builder.writeIndexGrid<openvdb::VectorGrid>("velocity", AGrid[0]->voxelSize()[0]);
+			    GU_PrimVDB::buildFromGrid(*detail, velocity, nullptr, velocity->getName().c_str());
+		    });
 	}
-	*/
 }
