@@ -39,7 +39,8 @@ class IndexOffsetSampler<0> {
 	__hostdev__ explicit IndexOffsetSampler(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>& grid) : mAcc(grid) {}
 
 	__hostdev__ [[nodiscard]] uint64_t offset(const int i, const int j, const int k) const { return mAcc.idx(i, j, k) - 1; }
-	__hostdev__ [[nodiscard]] uint64_t offset(nanovdb::Coord ijk) const { return offset(ijk[0], ijk[1], ijk[2]); }
+	__hostdev__ [[nodiscard]] uint64_t offset(const nanovdb::Coord ijk) const { return offset(ijk[0], ijk[1], ijk[2]); }
+	__hostdev__ [[nodiscard]] bool isActive(const nanovdb::Coord ijk) const { return mAcc.isActive(ijk); }
 
    private:
 	AccessorT mAcc;
@@ -49,21 +50,22 @@ class IndexOffsetSampler<0> {
 template <typename ValueT>
 class IndexSampler<ValueT, 0> {
    public:
-	__hostdev__ explicit IndexSampler(const IndexOffsetSampler<0>& offsetSampler)
-	    : mOffsetSampler(offsetSampler), mPos(nanovdb::Coord::max()), mOffset(0) {}
+	__hostdev__ explicit IndexSampler(const IndexOffsetSampler<0>& offsetSampler, const ValueT* data)
+	    : mOffsetSampler(offsetSampler), mPos(nanovdb::Coord::max()), mOffset(0), mData(data) {}
 
-	__hostdev__ ValueT operator()(const nanovdb::Coord& ijk, const ValueT* data) const {
+	__hostdev__ ValueT operator()(const nanovdb::Coord& ijk) const {
 		if (ijk != mPos) {
 			mPos = ijk;
 			mOffset = mOffsetSampler.offset(ijk[0], ijk[1], ijk[2]);
 		}
-		return data[mOffset];
+		return mData[mOffset];
 	}
 
    private:
 	const IndexOffsetSampler<0>& mOffsetSampler;
 	mutable nanovdb::Coord mPos;
 	mutable uint64_t mOffset;
+	const ValueT* mData;
 };
 
 
@@ -72,7 +74,7 @@ class TrilinearSampler {
    public:
 	__hostdev__ explicit TrilinearSampler(const IndexOffsetSampler<0>& offsetSampler) : mOffsetSampler(offsetSampler) {}
 
-	[[nodiscard]] const IndexOffsetSampler<0>& Acc() const { return mOffsetSampler; }
+	[[nodiscard]] __hostdev__ const IndexOffsetSampler<0>& Acc() const { return mOffsetSampler; }
 
 	__hostdev__ void stencil(nanovdb::Coord& ijk, ValueT (&v)[2][2][2], const ValueT* data) const {
 		// (i,   j,   k)

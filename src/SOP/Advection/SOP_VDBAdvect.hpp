@@ -1,9 +1,7 @@
 #pragma once
 
-#include <PRM/PRM_TemplateBuilder.h>
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
-#include <SOP_VDBAdvectVelocity.proto.h>
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/cuda/DeviceBuffer.h>
 
@@ -75,3 +73,6 @@ extern "C" void pointToGridVectorToDevice(HNS::OpenVectorGrid& in_data, float vo
 
 extern "C" void AdvectFloat(HNS::OpenFloatGrid& in_data, const nanovdb::Vec3fGrid* vel_grid, HNS::NanoFloatGrid& out_data, float voxelSize,
                             float dt, const cudaStream_t& stream);
+
+extern "C" void AdvectIndexGrid(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* indexGrid, HNS::GridIndexedData& data, float dt,
+                                float voxelSize, cudaStream_t stream);
