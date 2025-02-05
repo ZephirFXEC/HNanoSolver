@@ -54,8 +54,6 @@ class SOP_HNanoAdvectVelocityVerb final : public SOP_NodeVerb {
 
 	CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_GENERATOR; }
 
-	[[nodiscard]] static UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, openvdb::VectorGrid::Ptr& grid, const UT_StringHolder& group);
-
 	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
 	static const SOP_NodeVerb::Register<SOP_HNanoAdvectVelocityVerb> theVerb;
 	static const char* const theDsFile;

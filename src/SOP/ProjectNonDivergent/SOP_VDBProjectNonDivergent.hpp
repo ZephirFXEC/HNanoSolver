@@ -4,15 +4,14 @@
 
 #pragma once
 
-#include <PRM/PRM_TemplateBuilder.h>
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
-
 #include <nanovdb/GridHandle.h>
 #include <nanovdb/cuda/DeviceBuffer.h>
 
 #include "SOP_VDBProjectNonDivergent.proto.h"
 #include "Utils/GridData.hpp"
+#include "Utils/Utils.hpp"
 
 class SOP_HNanoVDBProjectNonDivergent final : public SOP_Node {
    public:
@@ -66,7 +65,7 @@ class SOP_HNanoVDBProjectNonDivergentVerb final : public SOP_NodeVerb {
 	[[nodiscard]] SOP_NodeCache* allocCache() const override { return new SOP_HNanoVDBProjectNonDivergentCache(); }
 	[[nodiscard]] UT_StringHolder name() const override { return "HNanoProjectNonDivergent"; }
 
-	SOP_NodeVerb::CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_DUPLICATE; }
+	SOP_NodeVerb::CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_GENERATOR; }
 
 	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
 
@@ -82,3 +81,6 @@ extern "C" void PressureProjection(const nanovdb::GridHandle<nanovdb::cuda::Devi
 
 extern "C" void Divergence(const nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& in_vel, HNS::OpenVectorGrid& in_data,
 						   HNS::OpenFloatGrid& out_data, const cudaStream_t& stream);
+
+extern "C" void Divergence_idx(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* indexGrid, HNS::GridIndexedData& data,
+ size_t iteration, float voxelSize, const cudaStream_t& stream);

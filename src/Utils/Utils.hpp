@@ -364,8 +364,7 @@ inline bool GridvdbApply(openvdb::GridBase::Ptr& vdb, OpT& op, const bool makeUn
 
 // Custom Utils :
 template <typename GridT>
-static UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, std::vector<typename GridT::Ptr>& grid,
-												  const UT_StringHolder& group) {
+static UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, std::vector<typename GridT::Ptr>& grid, const UT_StringHolder& group) {
 	const GA_PrimitiveGroup* groupRef = aGeo->findPrimitiveGroup(group);
 	for (openvdb_houdini::VdbPrimIterator it(aGeo, groupRef); it; ++it) {
 		if (auto vdb = openvdb::gridPtrCast<GridT>((*it)->getGridPtr())) {
@@ -374,6 +373,24 @@ static UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, std::vector<typename Gri
 	}
 
 	if (grid.empty()) {
+		return UT_ERROR_ABORT;
+	}
+
+	return UT_ERROR_NONE;
+}
+
+
+template <typename GridT>
+UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, typename GridT::Ptr& grid,
+						       const UT_StringHolder& group) {
+	const GA_PrimitiveGroup* groupRef = aGeo->findPrimitiveGroup(group);
+	for (openvdb_houdini::VdbPrimIterator it(aGeo, groupRef); it; ++it) {
+		if (const auto vdb = openvdb::gridPtrCast<GridT>((*it)->getGridPtr())) {
+			grid = vdb;
+		}
+	}
+
+	if (!grid) {
 		return UT_ERROR_ABORT;
 	}
 

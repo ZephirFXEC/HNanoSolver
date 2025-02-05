@@ -1,16 +1,18 @@
 //
 // Created by zphrfx on 03/10/2024.
 //
-
 #include "SOP_VDBProjectNonDivergent.hpp"
-#define NANOVDB_USE_OPENVDB
 
+#include <GU/GU_Detail.h>
+#include <GU/GU_PrimVDB.h>
 #include <UT/UT_DSOVersion.h>
-#include <nanovdb/NanoVDB.h>
+#include <PRM/PRM_TemplateBuilder.h>
 
-#include <Utils/OpenToNano.hpp>
-#include <Utils/ScopedTimer.hpp>
-#include <Utils/Utils.hpp>
+#include "Utils/GridBuilder.hpp"
+#include "Utils/ScopedTimer.hpp"
+
+#define NANOVDB_USE_OPENVDB
+#include <nanovdb/tools/CreateNanoGrid.h>
 
 
 const char* const SOP_HNanoVDBProjectNonDivergentVerb::theDsFile = R"THEDSFILE(
@@ -59,7 +61,7 @@ PRM_Template* SOP_HNanoVDBProjectNonDivergent::buildTemplates() {
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanoprojectnondivergent", "HNanoProjectNonDivergent",
 	                                   SOP_HNanoVDBProjectNonDivergent::myConstructor, SOP_HNanoVDBProjectNonDivergent::buildTemplates(), 1,
-	                                   1, nullptr, 0));
+	                                   1, nullptr, OP_FLAG_GENERATOR));
 }
 
 
@@ -76,82 +78,50 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 	GU_Detail* detail = cookparms.gdh().gdpNC();
 	const GU_Detail* in_geo = cookparms.inputGeo(0);
 
-	openvdb::VectorGrid::ConstPtr in_velocity = nullptr;
-	for (openvdb_houdini::VdbPrimIterator it(in_geo); it; ++it) {
-		if (const auto vdb = openvdb::gridPtrCast<openvdb::VectorGrid>((*it)->getGridPtr())) {
-			in_velocity = vdb;
-		}
+	openvdb::VectorGrid::Ptr in_velocity = nullptr;
+	if (auto err = loadGrid<openvdb::VectorGrid>(in_geo, in_velocity, sopparms.getVelgrid()); err != UT_ERROR_NONE) {
+		err = cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
 	}
-	if (in_velocity == nullptr) {
-		cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
-	}
+
 
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
 
-	HNS::OpenVectorGrid open_out_data;
+	using SrcGridT = openvdb::FloatGrid;
+	using DstBuildT = nanovdb::ValueOnIndex;
+	using BufferT = nanovdb::cuda::DeviceBuffer;
+
+
+	SrcGridT::Ptr domain = openvdb::createGrid<openvdb::FloatGrid>();
 	{
-		{
-			ScopedTimer timer("Extracting voxels from " + in_velocity->getName());
-			HNS::extractFromOpenVDB<openvdb::VectorGrid, openvdb::Vec3f>(in_velocity, open_out_data);
-		}
-
-		{
-			ScopedTimer timer("Converting " + in_velocity->getName() + " to NanoVDB");
-			pointToGridVectorToDevice(open_out_data, in_velocity->voxelSize()[0], sopcache->pHandle, stream);
-		}
+		ScopedTimer timer("Merging topology");
+		domain->topologyUnion(*in_velocity);
 	}
 
+	HNS::GridIndexedData data;
+	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
+	{
+		ScopedTimer t("Extracting data from OpenVDB");
 
-	HNS::OpenVectorGrid out_data{};
-	HNS::OpenFloatGrid divergence{};
-	if(!sopparms.getOutdiv()){
-		ScopedTimer timer("Computing Pressure Projection");
-		PressureProjection(sopcache->pHandle, open_out_data, out_data, sopparms.getIterations(), stream);
-	} else {
-		ScopedTimer timer("Computing Divergence");
-		Divergence(sopcache->pHandle, open_out_data, divergence, stream);
+		builder.addGrid(in_velocity, "vel");
+		builder.build();
 	}
 
-	if(!sopparms.getOutdiv()) {
-		ScopedTimer timer("Building Velocity Grid");
+	{
+		ScopedTimer timer("Copying data to device");
+		nanovdb::GridHandle<BufferT> handle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
+		handle.deviceUpload(stream, true);
+		const auto* gpuGrid = handle.deviceGrid<DstBuildT>();
 
-		const openvdb::Vec3fGrid::Ptr out = openvdb::Vec3fGrid::create();
-		out->setGridClass(openvdb::GRID_STAGGERED);
-		out->setVectorType(openvdb::VEC_CONTRAVARIANT_RELATIVE);
-		out->setTransform(openvdb::math::Transform::createLinearTransform(in_velocity->voxelSize()[0]));
+		Divergence_idx(gpuGrid, data, sopparms.getIterations(), in_velocity->voxelSize()[0], stream);
+	}
 
-		detail->clearAndDestroy();
+	{
+		ScopedTimer timer("Writing grids");
 
-		openvdb::tree::ValueAccessor<openvdb::VectorTree, false> accessor(out->tree());
+		openvdb::VectorGrid::Ptr div = builder.writeIndexGrid<openvdb::VectorGrid>("vel", in_velocity->voxelSize()[0]);
 
-		for (size_t i = 0; i < out_data.size; ++i) {
-			auto& coord = out_data.pCoords()[i];
-			auto value = out_data.pValues()[i];
-			accessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
-		}
-
-		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, "vel");
-	} else {
-		ScopedTimer timer("Building Divergence Grid");
-
-		openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create();
-		out->setGridClass(openvdb::GRID_FOG_VOLUME);
-		out->setTransform(openvdb::math::Transform::createLinearTransform(in_velocity->voxelSize()[0]));
-		out->setName("divergence");
-
-		detail->clearAndDestroy();
-
-		openvdb::tree::ValueAccessor<openvdb::FloatTree> valueAccessor(out->tree());
-
-		for (size_t i = 0; i < divergence.size; ++i) {
-			const auto& coord = divergence.pCoords()[i];
-			const auto& value = divergence.pValues()[i];
-			valueAccessor.setValueOn(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
-		}
-
-		// Build the GU_PrimVDB from the grid
-		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
+		GU_PrimVDB::buildFromGrid(*detail, div, nullptr, div->getName().c_str());
 	}
 
 	cudaStreamDestroy(stream);

@@ -88,7 +88,7 @@ class IndexGridBuilder {
 	}
 
 
-	template <typename GridT, typename ValueT = typename GridT::ValueType>
+	template <typename GridT>
 	typename GridT::Ptr writeIndexGrid(const std::string& name, const float voxelSize) {
 		typename GridT::Ptr grid = GridT::create();
 		grid->setName(name);
@@ -110,7 +110,7 @@ class IndexGridBuilder {
 			throw std::runtime_error("Mismatch between domain grid active voxel count and index grid data size");
 		}
 
-		const auto* data = m_outData->pValues<ValueT>(name);
+		const auto* data = m_outData->pValues<typename GridT::ValueType>(name);
 
 		for (size_t leafIdx = 0; leafIdx < m_numLeaves; ++leafIdx) {
 			const auto& leaf = domainLeafManager.leaf(leafIdx);

@@ -94,6 +94,7 @@ struct GridIndexedData {
 	/// @return true on success
 	bool allocateCoords(size_t numElements, const AllocationType mode) {
 		clearIndexes();  // in case we re-allocate
+		clearCoords();
 		bool success = false;
 		switch (mode) {
 			case AllocationType::Standard:
@@ -192,6 +193,7 @@ struct GridIndexedData {
 	void clear() {
 		clearIndexes();
 		clearValues();
+		clearCoords();
 		m_size = 0;
 	}
 
@@ -205,6 +207,8 @@ struct GridIndexedData {
 		}
 		m_valueBlocks.clear();
 	}
+
+	void clearCoords() { m_CoordBlock.clear(); }
 
    private:
 	/// @brief Find index of block by name, or -1 if none

@@ -4,6 +4,7 @@
 #include <nanovdb/math/SampleFromVoxels.h>
 
 #include "../Utils/GridData.hpp"
+#include "../Utils/Stencils.hpp"
 
 template <typename T>
 __device__ T lerp(T v0, T v1, T t) {
@@ -221,6 +222,14 @@ __global__ void get_grid_values(const CudaResources<nanovdb::Coord, T, true> res
 inline __device__ nanovdb::Vec3f sampleMACVelocity(
     const decltype(nanovdb::math::createSampler<1>(
         std::declval<const decltype(std::declval<nanovdb::Vec3fGrid>().tree().getAccessor())>()))& velSampler,
+    const nanovdb::Vec3f& pos) {
+	const float u = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
+	const float v = velSampler(pos + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
+	const float w = velSampler(pos + nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
+	return {u, v, w};
+}
+
+inline __device__ nanovdb::Vec3f sampleMACVelocity_idx(const IndexSampler<nanovdb::Vec3f, 1>& velSampler,
     const nanovdb::Vec3f& pos) {
 	const float u = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
 	const float v = velSampler(pos + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];

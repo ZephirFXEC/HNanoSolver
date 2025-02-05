@@ -65,7 +65,7 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 
 	openvdb::VectorGrid::Ptr AGrid = nullptr;
 
-	if (auto err = loadGrid(ageo, AGrid, sopparms.getAgroup()); err != UT_ERROR_NONE) {
+	if (auto err = loadGrid<openvdb::VectorGrid>(ageo, AGrid, sopparms.getAgroup()); err != UT_ERROR_NONE) {
 		err = cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
 	}
 

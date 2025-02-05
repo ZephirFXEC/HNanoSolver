@@ -228,6 +228,8 @@ TEST(GridIndexedDataTest, IndexSampler) {
 		EXPECT_EQ(sampler_data_f, nanosampler);
 		EXPECT_EQ(datav[i].x(), sampler_data_v[0]);
 	}
+
+	EXPECT_EQ(samplerf(nanovdb::Coord(-10, -10, -10)), 0);
 }
 
 

@@ -26,7 +26,7 @@ target_include_directories(HoudiniVDB INTERFACE
 )
 
 houdini_generate_proto_headers( FILES
-        #src/SOP/HNanoSolver/SOP_HNanoSolver.cpp
+        src/SOP/HNanoSolver/SOP_HNanoSolver.cpp
         src/SOP/Advection/SOP_VDBAdvect.cpp
         src/SOP/ReadWrite/SOP_VDBFromGrid.cpp
         src/SOP/VelocityAdvection/SOP_VDBAdvectVelocity.cpp
@@ -102,6 +102,7 @@ add_sop_library(SOP_VDBFromGrid
 
 # houdini_configure_target(SOP_HNanoSolver $ENV{DSO_Path})
 houdini_configure_target(SOP_VDBFromGrid $ENV{DSO_Path})
+houdini_configure_target(SOP_HNanoSolver $ENV{DSO_Path})
 houdini_configure_target(SOP_Advect $ENV{DSO_Path})
 houdini_configure_target(SOP_AdvectVelocity $ENV{DSO_Path})
 houdini_configure_target(SOP_ProjectNonDivergent $ENV{DSO_Path})
