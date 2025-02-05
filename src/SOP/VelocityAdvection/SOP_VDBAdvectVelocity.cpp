@@ -14,8 +14,6 @@
 #include <nanovdb/tools/CreateNanoGrid.h>
 
 
-
-
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanoadvectvelocity", "HNanoAdvectVelocity", SOP_HNanoAdvectVelocity::myConstructor,
 	                                   SOP_HNanoAdvectVelocity::buildTemplates(), 1, 1, nullptr, OP_FLAG_GENERATOR));
@@ -55,6 +53,8 @@ PRM_Template* SOP_HNanoAdvectVelocity::buildTemplates() {
 
 
 void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
+	std::printf("------------ %s ------------\n", "Begin Velocity Advection");
+
 	const auto& sopparms = cookparms.parms<SOP_VDBAdvectVelocityParms>();
 	const auto sopcache = dynamic_cast<SOP_HNanoAdvectVelocityCache*>(cookparms.cache());
 
@@ -86,26 +86,29 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
 	{
-		ScopedTimer t("Extracting data from OpenVDB");
+		ScopedTimer t("Generating Index Grid");
 
 		builder.addGrid(AGrid, "vel");
 		builder.build();
 	}
 
+	nanovdb::GridHandle<BufferT> idxHandle;
 	{
-		nanovdb::GridHandle<BufferT> idxHandle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
+		ScopedTimer t("Creating ValueOnIndex grid");
+		idxHandle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
 
 		idxHandle.deviceUpload(stream, false);
-		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>();
-
+	}
+	{
 		ScopedTimer timer_kernel("Launching kernels");
 		const float deltaTime = static_cast<float>(sopparms.getTimestep());
+		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>();
+
 		AdvectIndexGridVelocity(gpuGrid, data, deltaTime, AGrid->voxelSize()[0], stream);
 	}
 
 	{
 		ScopedTimer timer("Writing grids");
-
 
 		openvdb::VectorGrid::Ptr vel = builder.writeIndexGrid<openvdb::VectorGrid>("vel", AGrid->voxelSize()[0]);
 
@@ -113,6 +116,8 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 	}
 
 	cudaStreamDestroy(stream);
+
+	std::printf("------------ %s ------------\n", "End Velocity Advection");
 }
 
 

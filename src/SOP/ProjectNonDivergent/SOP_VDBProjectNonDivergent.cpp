@@ -5,8 +5,8 @@
 
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimVDB.h>
-#include <UT/UT_DSOVersion.h>
 #include <PRM/PRM_TemplateBuilder.h>
+#include <UT/UT_DSOVersion.h>
 
 #include "Utils/GridBuilder.hpp"
 #include "Utils/ScopedTimer.hpp"
@@ -71,6 +71,8 @@ const SOP_NodeVerb* SOP_HNanoVDBProjectNonDivergent::cookVerb() const { return S
 
 
 void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const {
+	std::printf("------------ %s ------------\n", "Begin Project Non Divergent");
+
 	openvdb_houdini::HoudiniInterrupter boss("Computing VDB grids");
 	auto sopcache = reinterpret_cast<SOP_HNanoVDBProjectNonDivergentCache*>(cookparms.cache());
 	const auto& sopparms = cookparms.parms<SOP_VDBProjectNonDivergentParms>();
@@ -101,18 +103,23 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
 	{
-		ScopedTimer t("Extracting data from OpenVDB");
+		ScopedTimer t("Generating Index Grid");
 
 		builder.addGrid(in_velocity, "vel");
 		builder.build();
 	}
 
+	nanovdb::GridHandle<BufferT> handle;
 	{
-		ScopedTimer timer("Copying data to device");
-		nanovdb::GridHandle<BufferT> handle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
-		handle.deviceUpload(stream, true);
-		const auto* gpuGrid = handle.deviceGrid<DstBuildT>();
+		ScopedTimer timer("Creating ValueOnIndex grid");
 
+		handle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
+		handle.deviceUpload(stream, true);
+	}
+
+	{
+		ScopedTimer timer_kernel("Launching kernels");
+		const auto* gpuGrid = handle.deviceGrid<DstBuildT>();
 		Divergence_idx(gpuGrid, data, sopparms.getIterations(), in_velocity->voxelSize()[0], stream);
 	}
 
@@ -125,4 +132,6 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 	}
 
 	cudaStreamDestroy(stream);
+
+	std::printf("------------ %s ------------\n", "End Project Non Divergent");
 }

@@ -3,8 +3,8 @@
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimVDB.h>
 #include <GU/GU_PrimVolume.h>
-#include <UT/UT_DSOVersion.h>
 #include <PRM/PRM_TemplateBuilder.h>
+#include <UT/UT_DSOVersion.h>
 
 #include "Utils/GridBuilder.hpp"
 #include "Utils/ScopedTimer.hpp"
@@ -50,6 +50,7 @@ const char* const SOP_HNanoVDBAdvectVerb::theDsFile = R"THEDSFILE(
 
 
 PRM_Template* SOP_HNanoVDBAdvect::buildTemplates() {
+	std::printf("------------ %s ------------\n", "Begin Advection");
 	static PRM_TemplateBuilder templ("SOP_VDBAdvect.cpp", SOP_HNanoVDBAdvectVerb::theDsFile);
 	if (templ.justBuilt()) {
 		// They don't work, for now all the FloatGrid found in the 1st input will be advected
@@ -99,7 +100,7 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
 	{
-		ScopedTimer t("Extracting data from OpenVDB");
+		ScopedTimer t("Generating Index Grid");
 
 		for (const auto& grid : AGrid) {
 			builder.addGrid(grid, grid->getName());
@@ -112,15 +113,18 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 		builder.build();
 	}
 
-
+	nanovdb::GridHandle<BufferT> idxHandle;
 	{
-		ScopedTimer timer("Building NanoVDB ValueOnIndex Grid");
-		nanovdb::GridHandle<BufferT> idxHandle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
+		ScopedTimer timer("Creating ValueOnIndex Grid");
+		idxHandle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
 
 		idxHandle.deviceUpload(stream, false);
+	}
+
+	{
+		ScopedTimer timer_kernel("Launching kernels");
 		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>();
 
-		ScopedTimer timer_kernel("Launching kernels");
 		const float deltaTime = static_cast<float>(sopparms.getTimestep());
 		AdvectIndexGrid(gpuGrid, data, deltaTime, AGrid[0]->voxelSize()[0], stream);
 	}
@@ -137,6 +141,10 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 		GU_PrimVDB::buildFromGrid(*detail, temperature, nullptr, temperature->getName().c_str());
 		GU_PrimVDB::buildFromGrid(*detail, fuel, nullptr, fuel->getName().c_str());
 	}
+
+	cudaStreamDestroy(stream);
+
+	std::printf("------------ %s ------------\n", "End Advection");
 }
 
 
