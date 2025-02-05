@@ -77,10 +77,3 @@ class SOP_HNanoSolverVerb final : public SOP_NodeVerb {
 	static const SOP_NodeVerb::Register<SOP_HNanoSolverVerb> theVerb;
 	static const char* const theDsFile;
 };
-
-
-extern "C" void AdvectFloats(std::vector<HNS::OpenFloatGrid>& in_data, const nanovdb::Vec3fGrid* vel_grid, std::vector<HNS::NanoFloatGrid>& out_data,
-							const float voxelSize, const float dt, const cudaStream_t& stream);
-
-extern "C" void pointToGridVectorToDevice(HNS::OpenVectorGrid& in_data, float voxelSize,
-										  nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, const cudaStream_t& stream);

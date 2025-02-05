@@ -123,7 +123,7 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 	nanovdb::Vec3fGrid* velGrid;
 	{
 		ScopedTimer timer("Converting " + BGrid[0]->getName() + " to NanoVDB");
-		pointToGridVectorToDevice(vel_out_data, BGrid[0]->voxelSize()[0], sopcache->pVelHandle, stream);
+		//pointToGridVectorToDevice(vel_out_data, BGrid[0]->voxelSize()[0], sopcache->pVelHandle, stream);
 		velGrid = sopcache->pVelHandle.deviceGrid<nanovdb::Vec3f>();
 	}
 
@@ -143,6 +143,6 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 		const float voxelSize = static_cast<float>(AGrid[0]->voxelSize()[0]);
 		const float deltaTime = static_cast<float>(sopparms.getTimestep());
 
-		AdvectFloats(gridData, velGrid, advectedData, voxelSize, deltaTime, stream);
+		//AdvectFloats(gridData, velGrid, advectedData, voxelSize, deltaTime, stream);
 	}
 }
