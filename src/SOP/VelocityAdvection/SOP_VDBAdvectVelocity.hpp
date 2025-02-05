@@ -4,7 +4,7 @@
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
 
-#include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/cuda/DeviceBuffer.h>
 
 #include "SOP_VDBAdvectVelocity.proto.h"
 #include "Utils/GridData.hpp"
@@ -63,3 +63,6 @@ class SOP_HNanoAdvectVelocityVerb final : public SOP_NodeVerb {
 
 extern "C" void AdvectVector(HNS::OpenVectorGrid& in_data, HNS::NanoVectorGrid& out_data, float voxelSize, float dt,
                              const cudaStream_t& stream);
+
+extern "C" void AdvectIndexGridVelocity(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* indexGrid, HNS::GridIndexedData& data, float dt,
+				float voxelSize, cudaStream_t stream);

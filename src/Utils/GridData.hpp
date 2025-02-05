@@ -76,7 +76,6 @@ struct GridData {
 /// @brief A grid data structure with indexed values blocks (e.g. density, velocity, etc.)
 /// Data is stored in a contiguous memory block for each named value block. The coords are separate.
 /// TODO(enzoc): implement GPU RLE encoding for the values blocks
-template <typename CoordT>
 struct GridIndexedData {
 	GridIndexedData() = default;
 
@@ -94,17 +93,20 @@ struct GridIndexedData {
 	/// @param mode the memory allocation mode (standard/aligned/cuda pinned)
 	/// @return true on success
 	bool allocateCoords(size_t numElements, const AllocationType mode) {
-		clearCoords();  // in case we re-allocate
+		clearIndexes();  // in case we re-allocate
 		bool success = false;
 		switch (mode) {
 			case AllocationType::Standard:
-				success = m_coordsBlock.allocateStandard(numElements);
+				success = m_IndexBlock.allocateStandard(numElements);
+				success = m_CoordBlock.allocateStandard(numElements);
 				break;
 			case AllocationType::Aligned:
-				success = m_coordsBlock.allocateAligned(numElements);
+				success = m_IndexBlock.allocateAligned(numElements);
+				success = m_CoordBlock.allocateAligned(numElements);
 				break;
 			case AllocationType::CudaPinned:
-				success = m_coordsBlock.allocateCudaPinned(numElements);
+				success = m_IndexBlock.allocateCudaPinned(numElements);
+				success = m_CoordBlock.allocateCudaPinned(numElements);
 				break;
 		}
 		if (!success) {
@@ -152,9 +154,13 @@ struct GridIndexedData {
 		return ptr;  // could be null if the block is not actually T
 	}
 
-	/// @return pointer to the coords array (null if unallocated)
-	CoordT* pCoords() { return m_coordsBlock.ptr.get(); }
-	const CoordT* pCoords() const { return m_coordsBlock.ptr.get(); }
+	/// @return pointer to the Index array (null if unallocated)
+	[[nodiscard]] uint64_t* pIndexes() { return m_IndexBlock.ptr.get(); }
+	[[nodiscard]] const uint64_t* pIndexes() const { return m_IndexBlock.ptr.get(); }
+
+	/// @return pointer to the Coord array (null if unallocated)
+	[[nodiscard]] openvdb::Coord* pCoords() { return m_CoordBlock.ptr.get(); }
+	[[nodiscard]] const openvdb::Coord* pCoords() const { return m_CoordBlock.ptr.get(); }
 
 	/// @brief Convenience function: returns the data pointer for block <T> with given name
 	///        or nullptr if not found / mismatch.
@@ -184,13 +190,13 @@ struct GridIndexedData {
 
 	/// @brief Deallocate everything
 	void clear() {
-		clearCoords();
+		clearIndexes();
 		clearValues();
 		m_size = 0;
 	}
 
 	/// @brief Deallocate only the coords block
-	void clearCoords() { m_coordsBlock.clear(); }
+	void clearIndexes() { m_IndexBlock.clear(); }
 
 	/// @brief Deallocate only the values blocks
 	void clearValues() {
@@ -211,8 +217,9 @@ struct GridIndexedData {
 		return -1;
 	}
 
-	// The coordinate block (one array)
-	MemoryBlock<CoordT> m_coordsBlock{};
+	// The Index block (one array)
+	MemoryBlock<uint64_t> m_IndexBlock{};
+	MemoryBlock<openvdb::Coord> m_CoordBlock{};
 	size_t m_size{0};
 
 	// A list of (valueBlock, name). Each valueBlock is an IValueBlock (type-erased).

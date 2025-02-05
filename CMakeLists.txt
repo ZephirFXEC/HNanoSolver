@@ -84,7 +84,6 @@ add_sop_library(SOP_Advect
 )
 
 add_sop_library(SOP_ProjectNonDivergent
-        "src/SOP/ProjectNonDivergent/MultigridSolver.hpp"
         "src/SOP/ProjectNonDivergent/SOP_VDBProjectNonDivergent.cpp"
         "src/SOP/ProjectNonDivergent/SOP_VDBProjectNonDivergent.hpp"
 )

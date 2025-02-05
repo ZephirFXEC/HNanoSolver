@@ -14,11 +14,10 @@
 
 #include "Utils/GridBuilder.hpp"
 #include "Utils/ScopedTimer.hpp"
-#include "Utils/Stencils.hpp"
 #include "Utils/Utils.hpp"
 
 
-extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>*, void* vel, void* density, size_t size, cudaStream_t stream);
+extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, HNS::GridIndexedData& data, float dt, float voxelSize, cudaStream_t stream );
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 {
@@ -41,13 +40,14 @@ const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 		parmtag	{ "script_action_help" "Select geometry from an available viewport.\nShift-click to turn on Select Groups." }
 		parmtag	{ "script_action_icon" "BUTTONS_reselect" }
     }
-	parm {
-		name "voxelsize"
-		label "Voxel Size"
+
+    parm {
+        name    "timestep"
+        label   "Time Step"
         type    float
         size    1
-        default { "0.5" }
-	}
+        default { "1/$FPS" }
+    }
 }
 )THEDSFILE";
 
@@ -62,7 +62,7 @@ PRM_Template* SOP_HNanoVDBFromGrid::buildTemplates() {
 
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanofromgrid", "HNanoFromGrid", SOP_HNanoVDBFromGrid::myConstructor,
-	                                   SOP_HNanoVDBFromGrid::buildTemplates(), 2, 2, nullptr, 0));
+	                                   SOP_HNanoVDBFromGrid::buildTemplates(), 2, 2, nullptr, OP_FLAG_GENERATOR));
 }
 
 
@@ -105,8 +105,8 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		domain->topologyUnion(*BGrid[0]);
 	}
 
-	HNS::GridIndexedData<uint32_t> data;
-	HNS::IndexGridBuilder<SrcGridT> builder(domain, data);
+	HNS::GridIndexedData data;
+	HNS::IndexGridBuilder<SrcGridT> builder(domain, &data);
 	{
 		ScopedTimer t("Extracting data from OpenVDB");
 
@@ -116,20 +116,15 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	}
 
 	{
-		ScopedTimer timer("NanoVDB conversion");
 		nanovdb::GridHandle<BufferT> idxHandle =
-		    nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*AGrid[0], 1u, false, false, 0);
+		    nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
 
 		idxHandle.deviceUpload(stream, false);
 		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>();
 
-		auto size = data.size();
-		auto density = data.getValueBlock<float>("density");
-		auto velocity = data.getValueBlock<openvdb::Vec3f>("velocity");
-
-		launch_kernels(gpuGrid, velocity->data(), density->data(), size, stream);
-
-		cudaStreamDestroy(stream);
+		ScopedTimer timer("Launching kernels");
+		const float deltaTime = static_cast<float>(sopparms.getTimestep());
+		launch_kernels(gpuGrid, data, deltaTime, AGrid[0]->voxelSize()[0], stream);
 	}
 
 
