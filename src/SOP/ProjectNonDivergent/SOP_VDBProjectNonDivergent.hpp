@@ -73,5 +73,5 @@ class SOP_HNanoVDBProjectNonDivergentVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
-extern "C" void Divergence_idx(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* indexGrid, HNS::GridIndexedData& data,
+extern "C" void Divergence_idx(HNS::GridIndexedData& data,
  size_t iteration, float voxelSize, const cudaStream_t& stream);

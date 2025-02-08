@@ -107,42 +107,4 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load velocity grid");
 	}
 
-
-	// Encode data in the Velocity topology
-
-
-	HNS::OpenVectorGrid vel_out_data;
-	{
-		ScopedTimer timer("Extracting voxels from " + BGrid[0]->getName());
-		HNS::extractFromOpenVDB<openvdb::VectorGrid, openvdb::Vec3f>(BGrid[0], vel_out_data);
-	}
-
-	cudaStream_t stream;
-	cudaStreamCreate(&stream);
-
-	nanovdb::Vec3fGrid* velGrid;
-	{
-		ScopedTimer timer("Converting " + BGrid[0]->getName() + " to NanoVDB");
-		//pointToGridVectorToDevice(vel_out_data, BGrid[0]->voxelSize()[0], sopcache->pVelHandle, stream);
-		velGrid = sopcache->pVelHandle.deviceGrid<nanovdb::Vec3f>();
-	}
-
-	std::vector<HNS::OpenFloatGrid> gridData(AGrid.size());
-	{
-		ScopedTimer timer("Load Grid Data");
-
-		for (size_t i = 0; i < AGrid.size(); ++i) {
-			HNS::extractFromOpenVDB<openvdb::FloatGrid, float>(AGrid[i], gridData[i]);
-		}
-	}
-
-	std::vector<HNS::NanoFloatGrid> advectedData(AGrid.size());
-	{
-		ScopedTimer timer("Advect Floats");
-
-		const float voxelSize = static_cast<float>(AGrid[0]->voxelSize()[0]);
-		const float deltaTime = static_cast<float>(sopparms.getTimestep());
-
-		//AdvectFloats(gridData, velGrid, advectedData, voxelSize, deltaTime, stream);
-	}
 }

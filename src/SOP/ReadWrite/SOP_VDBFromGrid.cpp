@@ -17,7 +17,8 @@
 #include "Utils/Utils.hpp"
 
 
-extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, HNS::GridIndexedData& data, float dt, float voxelSize, cudaStream_t stream );
+extern "C" void launch_kernels(HNS::GridIndexedData& data, float dt, float voxelSize, cudaStream_t stream );
+extern "C" void gpu_index_grid(HNS::GridIndexedData& data, float voxelSize, const cudaStream_t& stream);
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 {
@@ -103,35 +104,27 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		ScopedTimer t("Merging topology");
 		domain->topologyUnion(*AGrid[0]);
 		domain->topologyUnion(*BGrid[0]);
+
+		domain->tree().voxelizeActiveTiles();
 	}
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<SrcGridT> builder(domain, &data);
+	builder.setAllocType(AllocationType::CudaPinned);
 	{
-		ScopedTimer t("Extracting data from OpenVDB");
-
 		builder.addGrid(AGrid[0], "density");
 		builder.addGrid(BGrid[0], "velocity");
 		builder.build();
 	}
 
 	{
-		nanovdb::GridHandle<BufferT> idxHandle =
-		    nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
-
-		idxHandle.deviceUpload(stream, false);
-		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>();
-
 		ScopedTimer timer("Launching kernels");
 		const float deltaTime = static_cast<float>(sopparms.getTimestep());
-		launch_kernels(gpuGrid, data, deltaTime, AGrid[0]->voxelSize()[0], stream);
+		launch_kernels(data, deltaTime, AGrid[0]->voxelSize()[0], stream);
 	}
 
 
 	{
-		ScopedTimer timer("Building Grids");
-
-
 		tbb::parallel_invoke(
 		    [&] {
 			    const auto density = builder.writeIndexGrid<openvdb::FloatGrid>("density", AGrid[0]->voxelSize()[0]);

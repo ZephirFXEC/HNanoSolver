@@ -68,5 +68,5 @@ class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
-extern "C" void AdvectIndexGrid(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* indexGrid, HNS::GridIndexedData& data, float dt,
-                                float voxelSize, cudaStream_t stream);
+extern "C" void AdvectIndexGrid(HNS::GridIndexedData& data, float dt,
+                                float voxelSize, const cudaStream_t& stream);

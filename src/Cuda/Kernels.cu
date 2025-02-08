@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanovdb/NanoVDB.h>  // this defined the core tree data structure of NanoVDB accessable on both the host and device
-#include <openvdb/openvdb.h>
+#include <openvdb/Types.h>
 
 #include <cstdio>  // for printf
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
 
 #include "../Utils/Stencils.hpp"
-#include "utils.cuh"
+#include "../Utils/GridData.hpp"
 
 __global__ void sampler_gpu(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, const nanovdb::Coord* coords, const nanovdb::Vec3f* velocity, const float* density) {
 	const IndexOffsetSampler<0> idxSampler(*gpuGrid);
@@ -82,9 +82,20 @@ __global__ void advect_idx(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domai
 		printf("Density idx : [%llu] at {%f %f %f} = %f\n", idx, displacedPos[0], displacedPos[1], displacedPos[2], outDensity[idx]);
 }
 
+extern "C" void gpu_index_grid(HNS::GridIndexedData& data, const float voxelSize, const cudaStream_t& stream) {
+
+	const auto* h_coords = data.pCoords();
+	nanovdb::Coord* d_coords = nullptr;
+	cudaMalloc(&d_coords, data.size() * sizeof(nanovdb::Coord));
+	cudaMemcpyAsync(d_coords, h_coords, data.size() * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream);
+
+
+	cudaGetLastError();
+}
+
 
 // This is called by the client code on the host
-extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, HNS::GridIndexedData& data,
+extern "C" void launch_kernels(HNS::GridIndexedData& data,
                                const float dt,         // time step for advection
                                const float voxelSize,  // voxel size in world units
                                cudaStream_t stream) {
@@ -92,16 +103,10 @@ extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* g
 	const size_t totalVoxels = data.size();
 
     const nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>("velocity"));
-	if (!velocity) {
-		throw std::runtime_error("Velocity data not found in the grid.");
-	}
+	const auto* density = data.pValues<float>("density");
+	const auto* coords = data.pCoords();
 
-	auto* density = data.pValues<float>("density");
-	if (!density) {
-		throw std::runtime_error("Density data not found in the grid.");
-	}
-
-    // Allocate device memory for velocity.
+	// Allocate device memory for velocity.
     nanovdb::Vec3f* d_velocity = nullptr;
     cudaMalloc(&d_velocity, totalVoxels * sizeof(nanovdb::Vec3f));
     cudaMemcpyAsync(d_velocity, velocity, totalVoxels * sizeof(nanovdb::Vec3f),
@@ -116,24 +121,17 @@ extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* g
     // Allocate device memory for voxel coordinates.
     nanovdb::Coord* d_coords = nullptr;
     cudaMalloc(&d_coords, totalVoxels * sizeof(nanovdb::Coord));
-    cudaMemcpyAsync(d_coords, data.pCoords(), totalVoxels * sizeof(nanovdb::Coord),
+    cudaMemcpyAsync(d_coords, coords, totalVoxels * sizeof(nanovdb::Coord),
                     cudaMemcpyHostToDevice, stream);
 
-    // Allocate device memory for the output density.
-    float* d_outDensity = nullptr;
-    cudaMalloc(&d_outDensity, totalVoxels * sizeof(float));
-
-    constexpr int blockSize = 512;
-    int numBlocks = (totalVoxels + blockSize - 1) / blockSize;
-
-    // Launch the advection kernel.
-    advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_density,
-                                                    d_outDensity, totalVoxels, dt, voxelSize);
 
 
-    // Copy the updated density from device back to host.
-    cudaMemcpyAsync(density, d_outDensity, totalVoxels * sizeof(float),
-                    cudaMemcpyDeviceToHost, stream);
+	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
+	    nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
+	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
+
+	// Launch the advection kernel.
+	sampler_gpu<<<1, 1, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_density);
 
     // Wait for all asynchronous operations on this stream to finish.
     cudaStreamSynchronize(stream);
@@ -142,5 +140,4 @@ extern "C" void launch_kernels(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* g
     cudaFree(d_velocity);
     cudaFree(d_density);
     cudaFree(d_coords);
-    cudaFree(d_outDensity);
 }

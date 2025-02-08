@@ -59,5 +59,5 @@ class SOP_HNanoAdvectVelocityVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
-extern "C" void AdvectIndexGridVelocity(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* indexGrid, HNS::GridIndexedData& data, float dt,
-				float voxelSize, cudaStream_t stream);
+extern "C" void AdvectIndexGridVelocity(HNS::GridIndexedData& data, float dt,
+				float voxelSize, const cudaStream_t &stream);

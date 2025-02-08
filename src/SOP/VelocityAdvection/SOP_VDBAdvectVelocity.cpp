@@ -81,35 +81,24 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 	{
 		ScopedTimer timer("Merging topology");
 		domain->topologyUnion(*AGrid);
+		domain->tree().voxelizeActiveTiles();
 	}
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
+	builder.setAllocType(AllocationType::CudaPinned);
 	{
-		ScopedTimer t("Generating Index Grid");
-
 		builder.addGrid(AGrid, "vel");
 		builder.build();
 	}
 
-	nanovdb::GridHandle<BufferT> idxHandle;
-	{
-		ScopedTimer t("Creating ValueOnIndex grid");
-		idxHandle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
-
-		idxHandle.deviceUpload(stream, false);
-	}
 	{
 		ScopedTimer timer_kernel("Launching kernels");
 		const float deltaTime = static_cast<float>(sopparms.getTimestep());
-		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>();
-
-		AdvectIndexGridVelocity(gpuGrid, data, deltaTime, AGrid->voxelSize()[0], stream);
+		AdvectIndexGridVelocity(data, deltaTime, AGrid->voxelSize()[0], stream);
 	}
 
 	{
-		ScopedTimer timer("Writing grids");
-
 		openvdb::VectorGrid::Ptr vel = builder.writeIndexGrid<openvdb::VectorGrid>("vel", AGrid->voxelSize()[0]);
 
 		GU_PrimVDB::buildFromGrid(*detail, vel, nullptr, vel->getName().c_str());

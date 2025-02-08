@@ -98,36 +98,25 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 	{
 		ScopedTimer timer("Merging topology");
 		domain->topologyUnion(*in_velocity);
+		domain->tree().voxelizeActiveTiles();
+
 	}
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
+	builder.setAllocType(AllocationType::CudaPinned);
 	{
-		ScopedTimer t("Generating Index Grid");
-
 		builder.addGrid(in_velocity, "vel");
 		builder.build();
 	}
 
-	nanovdb::GridHandle<BufferT> handle;
-	{
-		ScopedTimer timer("Creating ValueOnIndex grid");
-
-		handle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
-		handle.deviceUpload(stream, true);
-	}
-
 	{
 		ScopedTimer timer_kernel("Launching kernels");
-		const auto* gpuGrid = handle.deviceGrid<DstBuildT>();
-		Divergence_idx(gpuGrid, data, sopparms.getIterations(), in_velocity->voxelSize()[0], stream);
+		Divergence_idx(data, sopparms.getIterations(), in_velocity->voxelSize()[0], stream);
 	}
 
 	{
-		ScopedTimer timer("Writing grids");
-
 		openvdb::VectorGrid::Ptr div = builder.writeIndexGrid<openvdb::VectorGrid>("vel", in_velocity->voxelSize()[0]);
-
 		GU_PrimVDB::buildFromGrid(*detail, div, nullptr, div->getName().c_str());
 	}
 

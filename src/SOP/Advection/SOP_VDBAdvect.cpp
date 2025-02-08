@@ -50,7 +50,6 @@ const char* const SOP_HNanoVDBAdvectVerb::theDsFile = R"THEDSFILE(
 
 
 PRM_Template* SOP_HNanoVDBAdvect::buildTemplates() {
-	std::printf("------------ %s ------------\n", "Begin Advection");
 	static PRM_TemplateBuilder templ("SOP_VDBAdvect.cpp", SOP_HNanoVDBAdvectVerb::theDsFile);
 	if (templ.justBuilt()) {
 		// They don't work, for now all the FloatGrid found in the 1st input will be advected
@@ -63,6 +62,8 @@ PRM_Template* SOP_HNanoVDBAdvect::buildTemplates() {
 
 
 void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
+	std::printf("------------ %s ------------\n", "Begin Advection");
+
 	const auto& sopparms = cookparms.parms<SOP_VDBAdvectParms>();
 	const auto sopcache = dynamic_cast<SOP_HNanoVDBAdvectCache*>(cookparms.cache());
 
@@ -87,21 +88,19 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 	cudaStreamCreate(&stream);
 
 	using SrcGridT = openvdb::FloatGrid;
-	using DstBuildT = nanovdb::ValueOnIndex;
-	using BufferT = nanovdb::cuda::DeviceBuffer;
 
 
 	SrcGridT::Ptr domain = openvdb::createGrid<openvdb::FloatGrid>();
 	{
 		ScopedTimer timer("Merging topology");
 		domain->topologyUnion(*BGrid[0]);
+		domain->tree().voxelizeActiveTiles();
 	}
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
+	builder.setAllocType(AllocationType::CudaPinned);
 	{
-		ScopedTimer t("Generating Index Grid");
-
 		for (const auto& grid : AGrid) {
 			builder.addGrid(grid, grid->getName());
 		}
@@ -113,25 +112,13 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 		builder.build();
 	}
 
-	nanovdb::GridHandle<BufferT> idxHandle;
-	{
-		ScopedTimer timer("Creating ValueOnIndex Grid");
-		idxHandle = nanovdb::tools::createNanoGrid<SrcGridT, DstBuildT, BufferT>(*domain, 1u, false, false, 0);
-
-		idxHandle.deviceUpload(stream, false);
-	}
-
 	{
 		ScopedTimer timer_kernel("Launching kernels");
-		const auto* gpuGrid = idxHandle.deviceGrid<DstBuildT>();
-
 		const float deltaTime = static_cast<float>(sopparms.getTimestep());
-		AdvectIndexGrid(gpuGrid, data, deltaTime, AGrid[0]->voxelSize()[0], stream);
+		AdvectIndexGrid(data, deltaTime, AGrid[0]->voxelSize()[0], stream);
 	}
 
 	{
-		ScopedTimer timer("Writing grids");
-
 		openvdb::FloatGrid::Ptr density, temperature, fuel;
 		tbb::parallel_invoke([&] { density = builder.writeIndexGrid<openvdb::FloatGrid>("density", AGrid[0]->voxelSize()[0]); },
 		                     [&] { temperature = builder.writeIndexGrid<openvdb::FloatGrid>("temperature", AGrid[0]->voxelSize()[0]); },
