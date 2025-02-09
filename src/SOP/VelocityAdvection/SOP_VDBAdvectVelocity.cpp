@@ -86,7 +86,7 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
-	builder.setAllocType(AllocationType::CudaPinned);
+	builder.setAllocType(AllocationType::Standard);
 	{
 		builder.addGrid(AGrid, "vel");
 		builder.build();

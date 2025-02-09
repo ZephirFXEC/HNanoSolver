@@ -8,16 +8,15 @@
 #if defined(__CUDACC__) || defined(__HIP__)
 #define __hostdev__ __host__ __device__
 #else
-#include <cmath> // for floor
+#include <cmath>  // for floor
 #define __hostdev__
 #endif
 
 #include <nanovdb/math/Math.h>
 
 
-template<template<typename> class Vec3T>
-__hostdev__ inline nanovdb::Coord Floor(Vec3T<float>& xyz)
-{
+template <template <typename> class Vec3T>
+__hostdev__ inline nanovdb::Coord Floor(Vec3T<float>& xyz) {
 	const float ijk[3] = {floorf(xyz[0]), floorf(xyz[1]), floorf(xyz[2])};
 	xyz[0] -= ijk[0];
 	xyz[1] -= ijk[1];
@@ -40,7 +39,7 @@ class IndexOffsetSampler<0> {
 
 	__hostdev__ [[nodiscard]] uint64_t offset(const int i, const int j, const int k) const { return mAcc.idx(i, j, k) - 1; }
 	__hostdev__ [[nodiscard]] uint64_t offset(const nanovdb::Coord ijk) const { return mAcc.getIndex(ijk) - 1; }
-	__hostdev__ [[nodiscard]] bool isActive(const int i, const int j, const int k) const { return mAcc.isActive(nanovdb::Coord(i,j,k)); }
+	__hostdev__ [[nodiscard]] bool isActive(const int i, const int j, const int k) const { return mAcc.isActive(nanovdb::Coord(i, j, k)); }
 	__hostdev__ [[nodiscard]] bool isActive(const nanovdb::Coord ijk) const { return mAcc.isActive(ijk); }
 
    private:
@@ -52,43 +51,43 @@ template <typename ValueT>
 class IndexSampler<ValueT, 0> {
    public:
 	__hostdev__ explicit IndexSampler(const IndexOffsetSampler<0>& offsetSampler, const ValueT* data)
-	    : mOffsetSampler(offsetSampler), mPos(nanovdb::Coord::max()), mOffset(0), mData(data) {}
-
+	    : mOffsetSampler(offsetSampler), mPos(nanovdb::Coord::max()), mOffset(0), mIsActive(false), mData(data) {}
 
 	__hostdev__ bool isDataActive(const nanovdb::Coord& ijk) const {
-		ValueT val = ValueT(0);
-
-		if (mOffsetSampler.isActive(ijk)) {
-			val = mData[mOffsetSampler.offset(ijk)];
-		}
-
-		return val != ValueT(0);
+		updateCache(ijk);
+		return mIsActive && mData[mOffset] != ValueT(0);
 	}
 
 	__hostdev__ ValueT operator()(const nanovdb::Coord& ijk) const {
-		if (!isDataActive(ijk)) {
+		updateCache(ijk);
+		if (!mIsActive) {
 			return ValueT(0);
 		}
-
-		if (ijk != mPos) {
-			mPos = ijk;
-			mOffset = mOffsetSampler.offset(ijk);
-		}
-
 		return mData[mOffset];
 	}
 
    private:
+	__hostdev__ void updateCache(const nanovdb::Coord& ijk) const {
+		if (ijk != mPos) {
+			mPos = ijk;
+			mIsActive = mOffsetSampler.isActive(ijk);
+			if (mIsActive) {
+				mOffset = mOffsetSampler.offset(ijk);
+			}
+		}
+	}
+
 	const IndexOffsetSampler<0>& mOffsetSampler;
 	mutable nanovdb::Coord mPos;
 	mutable uint64_t mOffset;
+	mutable bool mIsActive;
 	const ValueT* mData;
 };
 
 
 template <typename ValueT>
 class TrilinearSampler {
-public:
+   public:
 	__hostdev__ explicit TrilinearSampler(const IndexOffsetSampler<0>& offsetSampler, const ValueT* data)
 	    : mNearestSampler(offsetSampler, data) {}
 
@@ -128,7 +127,7 @@ public:
 		return lerp(y0, y1, uvw[0]);
 	}
 
-private:
+   private:
 	const IndexSampler<ValueT, 0> mNearestSampler;
 };
 
@@ -137,7 +136,7 @@ template <typename ValueT>
 class IndexSampler<ValueT, 1> : public TrilinearSampler<ValueT> {
 	using BaseT = TrilinearSampler<ValueT>;
 
-public:
+   public:
 	__hostdev__ explicit IndexSampler(const IndexOffsetSampler<0>& offsetSampler, const ValueT* data)
 	    : BaseT(offsetSampler, data), mPos(nanovdb::Coord::max()), mValues{} {}
 
@@ -156,7 +155,7 @@ public:
 		return (ijk == mPos) ? mValues[0][0][0] : BaseT::Acc()(ijk);
 	}
 
-private:
+   private:
 	mutable nanovdb::Coord mPos;
 	mutable ValueT mValues[2][2][2];
 

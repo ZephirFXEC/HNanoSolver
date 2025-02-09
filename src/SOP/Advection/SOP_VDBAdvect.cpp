@@ -99,7 +99,7 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
-	builder.setAllocType(AllocationType::CudaPinned);
+	builder.setAllocType(AllocationType::Standard);
 	{
 		for (const auto& grid : AGrid) {
 			builder.addGrid(grid, grid->getName());

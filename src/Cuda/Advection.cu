@@ -130,8 +130,8 @@ void advect_index_grid(HNS::GridIndexedData& data, const float dt,
 
 	// Free the allocated device memory.
 	cudaFree(d_velocity);
-	cudaFree(d_coords);
 	cudaFree(d_density);
+	cudaFree(d_coords);
 	cudaFree(d_outDensity);
 	cudaFree(d_temperature);
 	cudaFree(d_outTemperature);

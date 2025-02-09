@@ -3,9 +3,10 @@
 //
 #pragma once
 
-#include <typeindex>
-#include <nanovdb/NanoVDB.h>
+#include <openvdb/Types.h>
 #include "Memory.hpp"
+
+#include "typeindex"
 
 namespace HNS {
 
@@ -18,7 +19,7 @@ struct GridIndexedData {
 	GridIndexedData(const GridIndexedData&) = delete;
 	GridIndexedData& operator=(const GridIndexedData&) = delete;
 
-	GridIndexedData(GridIndexedData&&) noexcept = default;
+	GridIndexedData(GridIndexedData&&) = default;
 	GridIndexedData& operator=(GridIndexedData&&) = default;
 
 	// Destructor clears memory
@@ -28,39 +29,30 @@ struct GridIndexedData {
 	/// @param numElements the number of elements
 	/// @param mode the memory allocation mode (standard/aligned/cuda pinned)
 	/// @return true on success
-	bool allocateCoords(size_t numElements) {
-		clearIndexes();
+	bool allocateCoords(const size_t numElements) {
+		clearIndexes();  // in case we re-allocate
 		clearCoords();
-
-		auto allocHelper = [&](auto&& indexAlloc, auto&& coordAlloc) -> bool {
-			if (!(m_IndexBlock.*indexAlloc)(numElements)) return false;
-			if (!(m_CoordBlock.*coordAlloc)(numElements)) {
-				m_IndexBlock.clear();
-				return false;
-			}
-			return true;
-		};
-
-		bool success;
+		bool success = false;
 		switch (m_allocType) {
 			case AllocationType::Standard:
-				success = allocHelper(&MemoryBlock<uint64_t>::allocateStandard, &MemoryBlock<nanovdb::Coord>::allocateStandard);
+				success = m_IndexBlock.allocateStandard(numElements);
+				success = m_CoordBlock.allocateStandard(numElements);
 				break;
 			case AllocationType::Aligned:
-				success = allocHelper(&MemoryBlock<uint64_t>::allocateAligned, &MemoryBlock<nanovdb::Coord>::allocateAligned);
+				success = m_IndexBlock.allocateAligned(numElements);
+				success = m_CoordBlock.allocateAligned(numElements);
 				break;
 			case AllocationType::CudaPinned:
-				success = allocHelper(&MemoryBlock<uint64_t>::allocateCudaPinned, &MemoryBlock<nanovdb::Coord>::allocateCudaPinned);
+				success = m_IndexBlock.allocateCudaPinned(numElements);
+				success = m_CoordBlock.allocateCudaPinned(numElements);
 				break;
-			default:
-				success = false;
 		}
-
-		if (success)
-			m_size = numElements;
-		else
+		if (!success) {
 			std::cerr << "Failed to allocate coordinate block!\n";
-		return success;
+			return false;
+		}
+		m_size = numElements;
+		return true;
 	}
 
 
@@ -100,38 +92,54 @@ struct GridIndexedData {
 	}
 
 	/// @return pointer to the Index array (null if unallocated)
-	[[nodiscard]] __forceinline uint64_t* pIndexes() { return m_IndexBlock.ptr.get(); }
-	[[nodiscard]] __forceinline const uint64_t* pIndexes() const { return m_IndexBlock.ptr.get(); }
-	[[nodiscard]] __forceinline nanovdb::Coord* pCoords() { return m_CoordBlock.ptr.get(); }
-	[[nodiscard]] __forceinline const nanovdb::Coord* pCoords() const { return m_CoordBlock.ptr.get(); }
+	[[nodiscard]] uint64_t* pIndexes() { return m_IndexBlock.ptr.get(); }
+	[[nodiscard]] const uint64_t* pIndexes() const { return m_IndexBlock.ptr.get(); }
 
-	/// Convenience: return the data pointer for a value block (or nullptr on error)
+	/// @return pointer to the Coord array (null if unallocated)
+	[[nodiscard]] openvdb::Coord* pCoords() { return m_CoordBlock.ptr.get(); }
+	[[nodiscard]] const openvdb::Coord* pCoords() const { return m_CoordBlock.ptr.get(); }
+
+	/// @brief Convenience function: returns the data pointer for block <T> with given name
+	///        or nullptr if not found / mismatch.
 	template <typename T>
-	__forceinline T* pValues(const std::string& name) {
+	T* pValues(const std::string& name) {
 		auto* block = getValueBlock<T>(name);
 		return block ? block->data() : nullptr;
 	}
+
+	/// @brief Convenience function: returns the data pointer for block <T> with given name
+	///        or nullptr if not found / mismatch.
 	template <typename T>
-	__forceinline const T* pValues(const std::string& name) const {
+	const T* pValues(const std::string& name) const {
 		auto* block = getValueBlock<T>(name);
 		return block ? block->data() : nullptr;
 	}
 
-	[[nodiscard]] __forceinline size_t size() const { return m_size; }
-	[[nodiscard]] __forceinline size_t numValueBlocks() const { return m_valueBlocks.size(); }
+	/// @return how many elements are allocated
+	[[nodiscard]] size_t size() const { return m_size; }
 
-	__forceinline void clear() noexcept {
+	/// @return the number of distinct named value blocks
+	[[nodiscard]] size_t numValueBlocks() const { return m_valueBlocks.size(); }
+
+
+	/// @brief Deallocate everything
+	void clear() {
 		clearIndexes();
 		clearValues();
 		clearCoords();
 		m_size = 0;
 	}
-	__forceinline void clearIndexes() noexcept { m_IndexBlock.clear(); }
-	__forceinline void clearCoords() noexcept { m_CoordBlock.clear(); }
-	__forceinline void clearValues() noexcept {
+
+	/// @brief Deallocate only the coords block
+	void clearIndexes() { m_IndexBlock.clear(); }
+
+	/// @brief Deallocate only the values blocks
+	void clearValues() {
 		m_valueBlocks.clear();
 		m_blockNameMap.clear();
 	}
+
+	void clearCoords() { m_CoordBlock.clear(); }
 
 	void setAllocationType(const AllocationType type) { m_allocType = type; }
 
@@ -144,8 +152,10 @@ struct GridIndexedData {
 
 	// The Index block (one array)
 	MemoryBlock<uint64_t> m_IndexBlock{};
-	MemoryBlock<nanovdb::Coord> m_CoordBlock{};
+	MemoryBlock<openvdb::Coord> m_CoordBlock{};
 	size_t m_size{0};
+
+	AllocationType m_allocType{AllocationType::Standard};
 
 	struct ValueBlockEntry {
 		std::unique_ptr<IValueBlock> block;
@@ -155,6 +165,5 @@ struct GridIndexedData {
 
 	std::vector<ValueBlockEntry> m_valueBlocks{};
 	std::unordered_map<std::string, size_t> m_blockNameMap{};
-	AllocationType m_allocType{AllocationType::Standard};
 };
 }  // namespace HNS

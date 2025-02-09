@@ -48,13 +48,7 @@ class SOP_HNanoVDBProjectNonDivergent final : public SOP_Node {
 class SOP_HNanoVDBProjectNonDivergentCache final : public SOP_NodeCache {
    public:
 	SOP_HNanoVDBProjectNonDivergentCache() : SOP_NodeCache() {}
-	~SOP_HNanoVDBProjectNonDivergentCache() override {
-		if (!pHandle.isEmpty()) {
-			pHandle.reset();
-		}
-	}
-
-	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pHandle;
+	~SOP_HNanoVDBProjectNonDivergentCache() override = default;
 };
 
 class SOP_HNanoVDBProjectNonDivergentVerb final : public SOP_NodeVerb {

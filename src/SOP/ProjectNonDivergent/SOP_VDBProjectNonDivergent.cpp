@@ -104,7 +104,7 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
-	builder.setAllocType(AllocationType::CudaPinned);
+	builder.setAllocType(AllocationType::Standard);
 	{
 		builder.addGrid(in_velocity, "vel");
 		builder.build();

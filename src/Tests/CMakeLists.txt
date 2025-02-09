@@ -22,20 +22,7 @@ target_link_directories(IndexGrid PRIVATE "C:/Program Files/Microsoft Visual Stu
 #target_compile_options(IndexGrid PRIVATE $<$<CONFIG:Debug,RelWithDebInfo>:/fsanitize=address>)
 target_link_libraries(IndexGrid PRIVATE GTest::gtest_main Utils HoudiniVDB Kernels)
 
-if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
-    get_filename_component(CL_DIR ${CMAKE_C_COMPILER} DIRECTORY)
 
-    set(ASAN_COPY_COMMAND
-            ${CMAKE_COMMAND} -E copy_if_different ${CL_DIR}/clang_rt.asan_dynamic-x86_64.dll $<TARGET_FILE_DIR:${PROJECT_NAME}>
-    )
-
-    add_custom_command(
-            TARGET ${TESTNAME} POST_BUILD
-            COMMAND "$<$<CONFIG:Debug,RelWithDebInfo>:${ASAN_COPY_COMMAND}>"
-            COMMAND_EXPAND_LISTS
-    )
-
-endif()
 
 include(GoogleTest)
 gtest_discover_tests(IndexGrid)
