@@ -15,8 +15,14 @@ FetchContent_MakeAvailable(googletest)
 
 enable_testing()
 
+
 add_executable(IndexGrid IndexGrid.cpp)
+target_link_directories(IndexGrid PRIVATE "C:/Program Files/Microsoft Visual Studio/2022/Preview/VC/Tools/MSVC/14.42.34321/lib/x64")
+
+#target_compile_options(IndexGrid PRIVATE $<$<CONFIG:Debug,RelWithDebInfo>:/fsanitize=address>)
 target_link_libraries(IndexGrid PRIVATE GTest::gtest_main Utils HoudiniVDB Kernels)
+
+
 
 include(GoogleTest)
 gtest_discover_tests(IndexGrid)

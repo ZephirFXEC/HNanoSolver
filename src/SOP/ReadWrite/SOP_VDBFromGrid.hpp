@@ -62,5 +62,3 @@ class SOP_HNanoVDBFromGridVerb final : public SOP_NodeVerb {
 	static const SOP_NodeVerb::Register<SOP_HNanoVDBFromGridVerb> theVerb;
 	static const char* const theDsFile;
 };
-
-extern "C" void pointToGridFloat(HNS::OpenFloatGrid& in_data, float voxelSize, HNS::NanoFloatGrid& out_data, const cudaStream_t& stream);

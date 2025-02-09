@@ -3,12 +3,10 @@ enable_language(CUDA)
 include_directories("$ENV{HFS}/toolkit/include")
 
 add_library(Kernels STATIC
-        PointToGrid.cuh
         utils.cuh
         Kernels.cu
         Advection.cu
         PressureProjection.cu
-        PointToGrid.cu
 )
 
 target_compile_options(Kernels PRIVATE

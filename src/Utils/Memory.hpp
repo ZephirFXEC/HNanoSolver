@@ -1,11 +1,7 @@
-//
-// Created by zphrfx on 24/10/2024.
-//
-
 #pragma once
 
 #include <cuda_runtime.h>
-
+#include <typeinfo>
 #include <iostream>
 #include <memory>
 
@@ -13,30 +9,11 @@ enum class AllocationType { Standard, Aligned, CudaPinned };
 
 template <typename T>
 struct MemoryBlock {
-	struct Deleter {
-		AllocationType allocType = AllocationType::Standard;
-
-		void operator()(T* ptr) {
-			switch (allocType) {
-				case AllocationType::Standard:
-					delete[] ptr;
-					break;
-				case AllocationType::Aligned:
-					_aligned_free(ptr);
-					break;
-				case AllocationType::CudaPinned:
-					cudaFreeHost(ptr);
-					break;
-				default:
-					break;
-			}
-		}
-	};
-
-	std::unique_ptr<T[], Deleter> ptr{nullptr, Deleter{AllocationType::Standard}};
-	size_t size = 0;
-
 	MemoryBlock() = default;
+
+	~MemoryBlock() {
+		clear();
+	}
 
 	bool allocateCudaPinned(const size_t numElements) {
 		clear();
@@ -81,6 +58,29 @@ struct MemoryBlock {
 		ptr.reset();
 		size = 0;
 	}
+
+	struct Deleter {
+		AllocationType allocType = AllocationType::Standard;
+
+		void operator()(T* ptr) {
+			switch (allocType) {
+				case AllocationType::Standard:
+					delete[] ptr;
+				break;
+				case AllocationType::Aligned:
+					_aligned_free(ptr);
+				break;
+				case AllocationType::CudaPinned:
+					cudaFreeHost(ptr);
+				break;
+				default:
+					break;
+			}
+		}
+	};
+
+	std::unique_ptr<T[], Deleter> ptr{nullptr, Deleter{AllocationType::Standard}};
+	size_t size = 0;
 };
 
 

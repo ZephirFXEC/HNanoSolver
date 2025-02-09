@@ -3,17 +3,19 @@
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimVDB.h>
 #include <GU/GU_PrimVolume.h>
+#include <PRM/PRM_TemplateBuilder.h>
 #include <UT/UT_DSOVersion.h>
 
 #include "Utils/GridBuilder.hpp"
 #include "Utils/ScopedTimer.hpp"
 
+#define NANOVDB_USE_OPENVDB
+#include <nanovdb/tools/CreateNanoGrid.h>
 
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanoadvect", "HNanoAdvect", SOP_HNanoVDBAdvect::myConstructor,
 	                                   SOP_HNanoVDBAdvect::buildTemplates(), 2, 2, nullptr, OP_FLAG_GENERATOR));
 }
-
 
 const char* const SOP_HNanoVDBAdvectVerb::theDsFile = R"THEDSFILE(
 {
@@ -60,6 +62,8 @@ PRM_Template* SOP_HNanoVDBAdvect::buildTemplates() {
 
 
 void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) const {
+	std::printf("------------ %s ------------\n", "Begin Advection");
+
 	const auto& sopparms = cookparms.parms<SOP_VDBAdvectParms>();
 	const auto sopcache = dynamic_cast<SOP_HNanoVDBAdvectCache*>(cookparms.cache());
 
@@ -80,74 +84,54 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load velocity grid");
 	}
 
+	cudaStream_t stream;
+	cudaStreamCreate(&stream);
 
+	using SrcGridT = openvdb::FloatGrid;
+
+
+	SrcGridT::Ptr domain = openvdb::createGrid<openvdb::FloatGrid>();
 	{
-		ScopedTimer timer("Total Advection");
-
-		HNS::OpenVectorGrid vel_out_data;
-		{
-			ScopedTimer timer("Extracting voxels from " + BGrid[0]->getName());
-			HNS::extractFromOpenVDB<openvdb::VectorGrid, openvdb::Vec3f>(BGrid[0], vel_out_data);
-		}
-
-		cudaStream_t stream;
-		cudaStreamCreate(&stream);
-
-		nanovdb::Vec3fGrid* vel_grid;
-		{
-			ScopedTimer timer("Converting " + BGrid[0]->getName() + " to NanoVDB");
-			pointToGridVectorToDevice(vel_out_data, BGrid[0]->voxelSize()[0], sopcache->pBHandle, stream);
-			vel_grid = sopcache->pBHandle.deviceGrid<nanovdb::Vec3f>();
-		}
-
-		std::vector<HNS::NanoFloatGrid> out_data(AGrid.size());
-		std::vector<HNS::OpenFloatGrid> open_out_data(AGrid.size());
-		std::vector<cudaStream_t> streams(AGrid.size());
-		for (size_t i = 0; i < AGrid.size(); ++i) {
-			cudaStream_t s;
-			cudaStreamCreate(&s);
-			streams[i] = s;
-		}
-
-		for (size_t i = 0; i < AGrid.size(); ++i) {
-			ScopedTimer timer("Extracting voxels from " + AGrid[i]->getName());
-			HNS::extractFromOpenVDB<openvdb::FloatGrid, float>(AGrid[i], open_out_data[i]);
-		}
-
-		for (size_t i = 0; i < AGrid.size(); ++i) {
-			const auto name = "Computing " + AGrid[i]->getName() + " advection";
-			ScopedTimer timer(name);
-
-			const float voxelSize = static_cast<float>(AGrid[i]->voxelSize()[0]);
-			const float deltaTime = static_cast<float>(sopparms.getTimestep());
-			cudaStreamSynchronize(stream);
-			AdvectFloat(open_out_data[i], vel_grid, out_data[i], voxelSize, deltaTime, streams[i]);
-		}
-
-		for (size_t i = 0; i < AGrid.size(); ++i) {
-			ScopedTimer timer("Building Grid " + AGrid[i]->getName());
-
-			const openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create();
-			out->setGridClass(openvdb::GRID_FOG_VOLUME);
-			out->setTransform(openvdb::math::Transform::createLinearTransform(AGrid[i]->voxelSize()[0]));
-
-			openvdb::tree::ValueAccessor<openvdb::FloatTree, false> accessor(out->tree());
-
-			for (size_t j = 0; j < out_data[i].size; ++j) {
-				auto& coord = out_data[i].pCoords()[j];
-				auto value = out_data[i].pValues()[j];
-				accessor.setValue(openvdb::Coord(coord.x(), coord.y(), coord.z()), value);
-			}
-
-			GU_PrimVDB::buildFromGrid(*detail, out, nullptr, AGrid[i]->getName().c_str());
-		}
-
-		cudaStreamDestroy(stream);
-		for (auto s : streams) {
-			cudaStreamDestroy(s);
-		}
+		ScopedTimer timer("Merging topology");
+		domain->topologyUnion(*BGrid[0]);
+		domain->tree().voxelizeActiveTiles();
 	}
 
+	HNS::GridIndexedData data;
+	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
+	builder.setAllocType(AllocationType::Standard);
+	{
+		for (const auto& grid : AGrid) {
+			builder.addGrid(grid, grid->getName());
+		}
+
+		for (const auto& grid : BGrid) {
+			builder.addGrid(grid, grid->getName());
+		}
+
+		builder.build();
+	}
+
+	{
+		ScopedTimer timer_kernel("Launching kernels");
+		const float deltaTime = static_cast<float>(sopparms.getTimestep());
+		AdvectIndexGrid(data, deltaTime, AGrid[0]->voxelSize()[0], stream);
+	}
+
+	{
+		openvdb::FloatGrid::Ptr density, temperature, fuel;
+		tbb::parallel_invoke([&] { density = builder.writeIndexGrid<openvdb::FloatGrid>("density", AGrid[0]->voxelSize()[0]); },
+		                     [&] { temperature = builder.writeIndexGrid<openvdb::FloatGrid>("temperature", AGrid[0]->voxelSize()[0]); },
+		                     [&] { fuel = builder.writeIndexGrid<openvdb::FloatGrid>("fuel", AGrid[0]->voxelSize()[0]); });
+
+		GU_PrimVDB::buildFromGrid(*detail, density, nullptr, density->getName().c_str());
+		GU_PrimVDB::buildFromGrid(*detail, temperature, nullptr, temperature->getName().c_str());
+		GU_PrimVDB::buildFromGrid(*detail, fuel, nullptr, fuel->getName().c_str());
+	}
+
+	cudaStreamDestroy(stream);
+
+	std::printf("------------ %s ------------\n", "End Advection");
 }
 
 

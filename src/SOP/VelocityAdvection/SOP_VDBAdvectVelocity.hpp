@@ -4,7 +4,7 @@
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
 
-#include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/cuda/DeviceBuffer.h>
 
 #include "SOP_VDBAdvectVelocity.proto.h"
 #include "Utils/GridData.hpp"
@@ -54,12 +54,10 @@ class SOP_HNanoAdvectVelocityVerb final : public SOP_NodeVerb {
 
 	CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_GENERATOR; }
 
-	[[nodiscard]] static UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, openvdb::VectorGrid::Ptr& grid, const UT_StringHolder& group);
-
 	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
 	static const SOP_NodeVerb::Register<SOP_HNanoAdvectVelocityVerb> theVerb;
 	static const char* const theDsFile;
 };
 
-extern "C" void AdvectVector(HNS::OpenVectorGrid& in_data, HNS::NanoVectorGrid& out_data, float voxelSize, float dt,
-                             const cudaStream_t& stream);
+extern "C" void AdvectIndexGridVelocity(HNS::GridIndexedData& data, float dt,
+				float voxelSize, const cudaStream_t &stream);

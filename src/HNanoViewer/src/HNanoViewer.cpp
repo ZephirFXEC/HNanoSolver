@@ -22,8 +22,6 @@
 #include "Shader.hpp"
 #include "Utils/GridBuilder.hpp"
 
-extern "C" void pointToGridFloat(HNS::OpenFloatGrid& in_data, float voxelSize, HNS::NanoFloatGrid& out_data, const cudaStream_t& stream);
-
 // Callback function for window resizing
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
 
@@ -286,12 +284,13 @@ int main() {
 
 				// Measure Advection Step time
 				HNS::NanoFloatGrid nanoGridData;
+				/*
 				{
 					startTime = std::chrono::high_resolution_clock::now();
 					pointToGridFloat(gridData, grid->voxelSize()[0], nanoGridData, nullptr);
 					endTime = std::chrono::high_resolution_clock::now();
 					advectionStepTime = std::chrono::duration<float, std::milli>(endTime - startTime).count();
-				}
+				}*/
 
 
 				// Measure VDBToTexture time
