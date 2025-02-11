@@ -150,12 +150,8 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 	cudaMemset(d_divergence, 0, totalVoxels * sizeof(float));
 	cudaMemset(d_pressure, 0, totalVoxels * sizeof(float));
 
-	cudaDeviceSynchronize();
-
 	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
 	nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
-
-	cudaDeviceSynchronize();
 
 	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
 
@@ -173,7 +169,7 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 
 	subtractPressureGradient_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, totalVoxels, d_velocity, d_pressure, d_velocity, voxelSize);
 
-	cudaDeviceSynchronize();
+	cudaStreamSynchronize(stream);
 
 	cudaMemcpy(velocity, d_velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost);
 
