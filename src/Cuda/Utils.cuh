@@ -82,6 +82,21 @@ inline __device__ nanovdb::Vec3f sampleMACVelocity_idx(const IndexSampler<nanovd
 	return {u, v, w};
 }
 
+
+inline __device__ nanovdb::Vec3f MACToFaceCentered_idx(
+    const IndexSampler<nanovdb::Vec3f, 1>& velSampler,
+    const nanovdb::Vec3f& pos) {
+	const float up = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
+	const float vp = velSampler(pos + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
+	const float wp = velSampler(pos + nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
+
+	const float um = velSampler(pos - nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
+	const float vm = velSampler(pos - nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
+	const float wm = velSampler(pos - nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
+
+	return {(up + um) / 2.0f, (vp + vm) / 2.0f, (wp + wm) / 2.0f};
+}
+
 inline __device__ nanovdb::Vec3f MACToFaceCentered(
     const decltype(nanovdb::math::createSampler<1>(
         std::declval<const decltype(std::declval<nanovdb::Vec3fGrid>().tree().getAccessor())>()))& velSampler,

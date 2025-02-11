@@ -379,6 +379,18 @@ static UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, std::vector<typename Gri
 	return UT_ERROR_NONE;
 }
 
+static UT_ErrorSeverity loadGrid(const GU_Detail* detail, std::vector<openvdb::GridBase::Ptr>& grids) {
+	for (openvdb_houdini::VdbPrimIterator it(detail); it; ++it) {
+		grids.push_back((*it)->getGridPtr());
+	}
+
+	if (grids.empty()) {
+		return UT_ERROR_ABORT;
+	}
+
+	return UT_ERROR_NONE;
+}
+
 
 template <typename GridT>
 UT_ErrorSeverity loadGrid(const GU_Detail* aGeo, typename GridT::Ptr& grid,

@@ -12,8 +12,6 @@
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/cuda/DeviceBuffer.h>
 
 #include "Utils/GridData.hpp"
 #include "SOP_HNanoSolver.proto.h"
@@ -53,13 +51,8 @@ class SOP_HNanoSolver final : public SOP_Node {
 class SOP_HNanoSolverCache final : public SOP_NodeCache {
    public:
 	SOP_HNanoSolverCache() : SOP_NodeCache() {}
-	~SOP_HNanoSolverCache() override {
-		if (!pVelHandle.isEmpty()) {
-			pVelHandle.reset();
-		}
-	}
+	~SOP_HNanoSolverCache() override = default;
 
-	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pVelHandle;
 };
 
 class SOP_HNanoSolverVerb final : public SOP_NodeVerb {
@@ -70,7 +63,7 @@ class SOP_HNanoSolverVerb final : public SOP_NodeVerb {
 	[[nodiscard]] SOP_NodeCache* allocCache() const override { return new SOP_HNanoSolverCache(); }
 	[[nodiscard]] UT_StringHolder name() const override { return "HNanoSolver"; }
 
-	SOP_NodeVerb::CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_DUPLICATE; }
+	SOP_NodeVerb::CookMode cookMode(const SOP_NodeParms* parms) const override { return SOP_NodeVerb::COOK_GENERATOR; }
 
 	void cook(const SOP_NodeVerb::CookParms& cookparms) const override;
 

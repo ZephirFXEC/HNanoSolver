@@ -5,6 +5,7 @@
 #include "../Utils/Stencils.hpp"
 #include <openvdb/Types.h>
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
+#include "Utils.cuh"
 
 __global__ void advect_idx(
 	const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid,
@@ -19,17 +20,44 @@ __global__ void advect_idx(
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= totalVoxels) return;
 
-	const IndexOffsetSampler<0> idxSampler(*domainGrid);
-	const auto densitySampler = IndexSampler<float, 1>(idxSampler, inData);
+	const float inv_voxelSize = 1.0f / voxelSize;
+	const float scaled_dt = dt * inv_voxelSize;
 
+	const IndexOffsetSampler<0> idxSampler(*domainGrid);
 	const auto velocitySampler = IndexSampler<nanovdb::Vec3f, 1>(idxSampler, velocityData);
+	const auto dataSampler = IndexSampler<float, 1>(idxSampler, inData);
 
 	const nanovdb::Coord coord = coords[idx];
-	const nanovdb::Vec3f velocity = velocitySampler(coord);
+	const nanovdb::Vec3f pos = coord.asVec3s();
 
-	const nanovdb::Vec3f displacedPos = coord.asVec3s() - velocity * dt / voxelSize;
+	const float original = dataSampler(coord);
+	// -------------------------------------------
+	// Forward step (semi-Lagrangian):
+	// Trace backward in time to find donor cell.
+	// velocity at voxelCoordf (MAC-sampled)
+	const nanovdb::Vec3f velocity = velocitySampler(pos);
+	const nanovdb::Vec3f forward_pos = pos - velocity * scaled_dt;
+	const float value_forward = dataSampler(forward_pos);
 
-	outData[idx] = densitySampler(displacedPos);
+
+	// -------------------------------------------
+	// Backward step for BFECC:
+	// From the forward_pos, integrate forward dt again:
+	const nanovdb::Vec3f back_velocity = velocitySampler(forward_pos);
+	const nanovdb::Vec3f back_pos = pos + back_velocity * scaled_dt;
+	const float value_backward = dataSampler(back_pos);
+
+
+	// Error estimation and correction
+	const float error = computeError(original, value_backward);
+	float value_corrected = value_forward + error;
+	const float max_correction = computeMaxCorrection(value_forward, original);
+	value_corrected = clampValue(value_corrected, value_forward - max_correction, value_forward + max_correction);
+	value_corrected = enforceNonNegative(value_corrected);
+
+
+	// Store the new value
+	outData[idx] = value_corrected;
 }
 
 
@@ -45,16 +73,34 @@ __global__ void advect_idx(
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= totalVoxels) return;
 
-	const IndexOffsetSampler<0> idxSampler(*domainGrid);
+	const float inv_voxelSize = 1.0f / voxelSize;
+	const float scaled_dt = dt * inv_voxelSize;
 
+	const IndexOffsetSampler<0> idxSampler(*domainGrid);
 	const auto velocitySampler = IndexSampler<nanovdb::Vec3f, 1>(idxSampler, velocityData);
 
 	const nanovdb::Coord coord = coords[idx];
+	const nanovdb::Vec3f pos = coord.asVec3s();
+
 	const nanovdb::Vec3f velocity = velocitySampler(coord);
+	const nanovdb::Vec3f forward_pos = pos - velocity * scaled_dt;
+	const nanovdb::Vec3f value_forward = velocitySampler(forward_pos);
 
-	const nanovdb::Vec3f displacedPos = coord.asVec3s() - velocity * dt / voxelSize;
+	// -------------------------------------------
+	// Backward step for BFECC:
+	// From the forward_pos, integrate forward dt again:
+	const nanovdb::Vec3f back_velocity = velocitySampler(forward_pos);
+	const nanovdb::Vec3f back_pos = pos + back_velocity * scaled_dt;
+	const nanovdb::Vec3f value_backward = velocitySampler(back_pos);
 
-	outVelocity[idx] = velocitySampler(displacedPos);
+	// Error estimation and correction
+	const nanovdb::Vec3f error = computeError(velocity, value_backward);
+	nanovdb::Vec3f value_corrected = value_forward + error;
+	const nanovdb::Vec3f max_correction = computeMaxCorrection(value_forward, velocity);
+	value_corrected = clampValue(value_corrected, value_forward - max_correction, value_forward + max_correction);
+
+	// Store the new value
+	outVelocity[idx] = value_corrected;
 }
 
 
@@ -85,8 +131,6 @@ void advect_index_grid(HNS::GridIndexedData& data, const float dt,
 	cudaMalloc(&d_temperature, totalVoxels * sizeof(float));
 	cudaMalloc(&d_fuel, totalVoxels * sizeof(float));
 
-	cudaDeviceSynchronize();
-
 	cudaMemcpy(d_coords, data.pCoords(), totalVoxels * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_density, density, totalVoxels * sizeof(float), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_temperature, temperature, totalVoxels * sizeof(float), cudaMemcpyHostToDevice);
@@ -102,31 +146,24 @@ void advect_index_grid(HNS::GridIndexedData& data, const float dt,
 	cudaMalloc(&d_outTemperature, totalVoxels * sizeof(float));
 	cudaMalloc(&d_outFuel, totalVoxels * sizeof(float));
 
-	cudaDeviceSynchronize();
-
 	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
 	nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
 
-	cudaDeviceSynchronize();
 
 	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
 
-	cudaDeviceSynchronize();
-
-	constexpr int blockSize = 256;
+	constexpr int blockSize = 512;
 	int numBlocks = (totalVoxels + blockSize - 1) / blockSize;
 
 	advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_density, d_outDensity, totalVoxels, dt, voxelSize);
 	advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_temperature, d_outTemperature, totalVoxels, dt, voxelSize);
 	advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_fuel, d_outFuel, totalVoxels, dt, voxelSize);
 
-	cudaDeviceSynchronize();
+	cudaStreamSynchronize(stream);
 
 	cudaMemcpy(density, d_outDensity, totalVoxels * sizeof(float), cudaMemcpyDeviceToHost);
 	cudaMemcpy(temperature, d_outTemperature, totalVoxels * sizeof(float), cudaMemcpyDeviceToHost);
 	cudaMemcpy(fuel, d_outFuel, totalVoxels * sizeof(float), cudaMemcpyDeviceToHost);
-
-	cudaDeviceSynchronize();
 
 	// Free the allocated device memory.
 	cudaFree(d_velocity);
