@@ -6,7 +6,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <glm/gtc/matrix_transform.hpp>
-
+#include <vector>
 // Your own headers
 #include "OpenVDBLoader.hpp"
 #include "Renderer.hpp"
@@ -14,8 +14,9 @@
 #include "Utils/GridBuilder.hpp"
 
 #include "Application.hpp"
+#include "BrickMap.cuh"
 
-#include "BrickMap/BrickMap.cuh"
+extern "C" void accessBrick(const BrickMap& brickMap);
 
 // -------------------------------------------------------------
 // Constructor & Destructor
@@ -146,10 +147,10 @@ void Application::update() {
 // Rendering
 // -------------------------------------------------------------
 void Application::render() {
-    // Start the Dear ImGui frame
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
-    ImGui::NewFrame();
+	// Start the Dear ImGui frame
+	ImGui_ImplOpenGL3_NewFrame();
+	ImGui_ImplGlfw_NewFrame();
+	ImGui::NewFrame();
 
 	openvdb::math::BBox<openvdb::Vec3d> bbox;
     // ImGui window for performance metrics and controls
@@ -211,6 +212,8 @@ void Application::render() {
     glfwPollEvents();
 }
 
+
+
 // -------------------------------------------------------------
 // Main Loop
 // -------------------------------------------------------------
@@ -218,49 +221,40 @@ int Application::run() {
     if (!init())
         return -1;
 
+	BrickMap brickMap(16, 16, 16);
 
-	// Create a BrickMap with a maximum of 65,536 bricks.
-	BrickMap brickMap(16132);
-	brickMap.initialize();
+	// Allocate bricks at specific grid locations.
+	if (!brickMap.allocateBrickAt(0, 0, 0)) {
+		fprintf(stderr, "Failed to allocate brick at (0,0,0)\n");
+	}
+	if (!brickMap.allocateBrickAt(1, 1, 1)) {
+		fprintf(stderr, "Failed to allocate brick at (1,1,1)\n");
+	}
 
-	// Prepare some voxel updates.
-	// Global coordinate space is 0..8191 in each axis.
-	std::vector<VoxelUpdate> updates;
-	updates.push_back({100, 200, 300, Voxel(69.0f, 420.0f, 0.0f, nanovdb::Vec3f(1.0f, 0.0f, 0.0f))});
-	updates.push_back({150, 250, 350, Voxel(3.0f,  75.0f, 0.5f, nanovdb::Vec3f(1.0f, 1.0f, 0.0f))});
-	updates.push_back({1023, 1023, 1023, Voxel(10.5f,  50.0f, 0.2f, nanovdb::Vec3f(0.0f, 1.0f, 0.0f))});
+	Voxel* v = brickMap.getVoxelAt(1,1,1);
+	if (v == nullptr) {
+		fprintf(stderr, "Voxel at (1,1,1) is null\n");
+	}
 
+	printf("Voxel at (1,1,1) has value %f\n", v->density);
 
-	// Build the brick map from the host array.
-	brickMap.buildFromUpdates(updates);
+	{
+		ScopedTimer timer("BrickMap::Kernel");
+    	accessBrick(brickMap);
+	}
 
-	// Query some voxels.
-	Voxel v1 = brickMap.queryVoxel(100, 200, 300);
-	std::cout << "Voxel (100,200,300): density=" << v1.density << "\n";
-	Voxel v2 = brickMap.queryVoxel(1023, 1023, 1023);
-	std::cout << "Voxel (1024,1024,1024): density=" << v2.density << "\n";
-	Voxel v4 = brickMap.queryVoxel(150, 250, 350);
-	std::cout << "Voxel (150,250,350): density=" << v4.density << "\n";
+	Voxel* v2 = brickMap.getVoxelAt(1,1,1);
+	printf("After Kernel, Voxel at (1,1,1) has value %f\n", v2->density);
 
-	// Perform a dynamic update: remove the voxel (set to empty) at (150,250,350).
-	brickMap.updateVoxel(150, 250, 350, Voxel());  // Voxel() is empty.
-
-	// (Alternatively, after advecting a field on the GPU you might call deviceUpdateVoxel() from within another kernel.)
-
-	// Optionally, run a cleanup pass to deallocate any bricks that have become empty.
-	brickMap.cleanupEmptyBricks();
-
-	Voxel v4_after = brickMap.queryVoxel(150, 250, 350);
-	std::cout << "Voxel (150,250,350) after removal: density=" << v4_after.density << "\n";
 
 	std::cout << "BrickMap operations completed successfully.\n";
-
-    // Main loop
+    /*// Main loop
     while (!glfwWindowShouldClose(window_)) {
         update();
         processInput();
         render();
-    }
+    }*/
+
 
     return 0;
 }

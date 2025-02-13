@@ -5,7 +5,7 @@
 #include <nanovdb/math/Math.h>
 
 #include <iostream>
-
+#include <vector>
 
 #define CHECK_CUDA(call)                                                                                                     \
 	{                                                                                                                        \
@@ -17,17 +17,34 @@
 	}
 
 
-constexpr int BRICK_MAP_DIM = 64;  // Top-level grid is 256^3 cells.
-constexpr int BRICK_DIM = 16;       // Each brick is 32^3 voxels.
-constexpr int TOTAL_BRICKS_IN_MAP = BRICK_MAP_DIM * BRICK_MAP_DIM * BRICK_MAP_DIM;
-constexpr int VOXELS_PER_BRICK = BRICK_DIM * BRICK_DIM * BRICK_DIM;
-
+constexpr uint32_t BRICK_SIZE = 32;
+constexpr uint32_t DEFAULT_GRID_DIM = 256;
+constexpr size_t MAX_BRICKS = 128 * 128;              // Adjustable based on GPU memory
+constexpr size_t MAX_ALLOCATION_REQUESTS = MAX_BRICKS;  // Maximum pending allocations
 
 struct Voxel;
 struct VoxelUpdate;
 struct Brick;
+struct BrickPool;
 class BrickMap;
 
+
+struct BrickMapStats {
+	uint32_t allocatedBricks{0};
+	uint32_t activeVoxels{0};
+	float memoryUsageMB{0.0f};
+	float occupancyRatio{0.0f};  // activeVoxels / (allocatedBricks * VOXELS_PER_BRICK)
+};
+
+
+struct AllocationRequest {
+	uint32_t x, y, z;
+	bool valid;
+};
+
+struct RequestCounter {
+	uint32_t count;
+};
 
 /// @brief Structure for a voxel.
 struct Voxel {
@@ -49,93 +66,70 @@ struct Voxel {
 /// @brief Structure for a voxel update.
 /// Contain a Voxel and its global coordinates.
 struct VoxelUpdate {
-	int x{}, y{}, z{};
+	nanovdb::Coord coord{};
 	Voxel voxel{};
 };
 
 
 /// @brief Linear Array of Voxel and occupancy count.
 struct Brick {
-	Voxel voxels[VOXELS_PER_BRICK]{};
-	int occupancy{};
+	static constexpr uint32_t VOLUME = BRICK_SIZE * BRICK_SIZE * BRICK_SIZE;
+	Voxel* data = nullptr;            // Device pointer to voxel data for this brick
+	bool isLoaded = false;            // Whether this brick is loaded (active) on the GPU
+	uint32_t poolIndex = UINT32_MAX;  // The index in the BrickPool (used for bookkeeping)
 };
 
 
-//-----------------------------------------------------------------------------
-// Kernel to initialize the top-level brick map to –1 (meaning “no brick allocated”).
-__global__ void initBrickMapKernel(int* brickMap, int totalEntries);
+struct BrickPool {
+	explicit BrickPool(uint32_t maxBricks = MAX_BRICKS);
+	~BrickPool();
 
+	uint32_t allocateBrick();
+	void deallocateBrick(uint32_t index);
 
-//-----------------------------------------------------------------------------
-// Kernel to initialize the free list. The free list holds indices into the brick pool.
-__global__ void initFreeListKernel(int* freeList, int* freeListTop, int maxBricks);
+	[[nodiscard]] Brick* getDeviceBricks() const { return d_bricks; }
+	[[nodiscard]] Voxel* getDeviceVoxelData() const { return d_voxelData; }
 
+   private:
+	size_t m_maxBricks;
+	size_t m_numAllocatedBricks;
+	std::vector<uint32_t> m_freeIndices;
 
-//-----------------------------------------------------------------------------
-// Kernel to build the brick map from an array of voxel updates.
-__global__ void buildBrickMapKernel(const VoxelUpdate* updates, int numUpdates, int* brickMap, Brick* bricks, int* freeList,
-                                    int* freeListTop);
-
-
-//-----------------------------------------------------------------------------
-// A cleanup kernel that scans the grid and deallocates bricks whose occupancy is zero.
-__global__ void cleanupEmptyBricksKernel(int* brickMap, Brick* bricks, int* freeList, int* freeListTop, uint32_t maxBricks);
-
-
-//-----------------------------------------------------------------------------
-// A kernel that calls the deviceUpdateVoxel() member function of BrickMap.
-// This allows dynamic updates to be performed directly on the GPU.
-__global__ void updateVoxelKernelClass(BrickMap bm, int x, int y, int z, Voxel newVoxel);
+	Brick* d_bricks;
+	Voxel* d_voxelData;
+};
 
 
 class BrickMap {
    public:
-	explicit BrickMap(const uint32_t maxBricks) : _maxBricks(maxBricks) {}
-	__host__ ~BrickMap() { cleanup(); }
+	explicit BrickMap(uint32_t dimX = DEFAULT_GRID_DIM, uint32_t dimY = DEFAULT_GRID_DIM, uint32_t dimZ = DEFAULT_GRID_DIM);
 
-	__hostdev__ BrickMap(const BrickMap& other)
-		   : d_brickMap(other.d_brickMap)
-		   , d_bricks(other.d_bricks)
-		   , d_freeList(other.d_freeList)
-		   , d_freeListTop(other.d_freeListTop)
-		   , _maxBricks(other._maxBricks) {}
+	~BrickMap();
 
-	// Host-only initialization: allocate device memory and initialize arrays.
-	__host__ void initialize();
-
-	// Host-only build: copy voxel updates to the device and launch a kernel.
-	__host__ void buildFromUpdates(const std::vector<VoxelUpdate>& updates) const;
-
-	// Host-only wrapper for a dynamic update. Launches a kernel that calls the
-	__host__ void updateVoxel(int x, int y, int z, const Voxel& newVoxel) const;
-
-	// Host-only query: copies a voxel from the device.
-	__host__ Voxel queryVoxel(int x, int y, int z) const;
-
-	// Host-only cleanup: deallocate empty bricks.
-	__host__ void cleanupEmptyBricks() const;
-
-	// Device update: update the voxel at (x,y,z) with newVoxel.
-	__device__ void deviceUpdateVoxel(int x, int y, int z, const Voxel& newVoxel) const;
-
-	// Device query: retrieve the voxel at (x,y,z) and store it in result.
-	__device__ void deviceQueryVoxel(int x, int y, int z, Voxel& result) const;
+	[[nodiscard]] bool allocateBrickAt(uint32_t x, uint32_t y, uint32_t z) const;
+	void deallocateBrickAt(uint32_t x, uint32_t y, uint32_t z) const;
 
 
-   private:
-	int* d_brickMap = nullptr;     // Top-level grid (size: TOTAL_BRICKS_IN_MAP)
-	Brick* d_bricks = nullptr;     // Brick pool.
-	int* d_freeList = nullptr;     // Free list (indices into the brick pool).
-	int* d_freeListTop = nullptr;  // Count of free bricks.
-	int _maxBricks;            // Maximum number of bricks in the pool.
+	uint32_t* getDeviceGrid() const { return d_grid; }
+	BrickPool* getPool() { return m_pool.get(); }
 
-	void cleanup() const {
-		if (d_brickMap) cudaFree(d_brickMap);
-		if (d_bricks) cudaFree(d_bricks);
-		if (d_freeList) cudaFree(d_freeList);
-		if (d_freeListTop) cudaFree(d_freeListTop);
+	[[nodiscard]] const BrickPool* getPool() const { return m_pool.get(); }
+	[[nodiscard]] const uint32_t* getDimensions() const { return m_dimensions; }
+	[[nodiscard]] Voxel* getVoxelAt(uint32_t x, uint32_t y, uint32_t z) const;
+
+	__device__ void requestAllocation(uint32_t x, uint32_t y, uint32_t z,AllocationRequest* req, RequestCounter* counter);
+	__host__ void processAllocationRequests();
+
+private:
+	uint32_t m_dimensions[3];
+	std::unique_ptr<BrickPool> m_pool;
+	uint32_t* d_grid;
+
+	// Computes the 1D index into the grid array from 3D coordinates.
+	[[nodiscard]] uint32_t getGridIndex(const uint32_t x, const uint32_t y, const uint32_t z) const {
+		return x + y * m_dimensions[0] + z * m_dimensions[0] * m_dimensions[1];
 	}
 
-	BrickMap& operator=(const BrickMap&) = delete;
-
+	AllocationRequest* d_allocationRequests = nullptr;
+	RequestCounter* d_requestCounter = nullptr;
 };
