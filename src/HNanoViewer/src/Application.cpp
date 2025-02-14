@@ -221,31 +221,33 @@ int Application::run() {
     if (!init())
         return -1;
 
-	BrickMap brickMap(16, 16, 16);
+	BrickMap brickMap(256, 256, 256);
 
-	// Allocate bricks at specific grid locations.
-	if (!brickMap.allocateBrickAt(0, 0, 0)) {
-		fprintf(stderr, "Failed to allocate brick at (0,0,0)\n");
-	}
-	if (!brickMap.allocateBrickAt(1, 1, 1)) {
-		fprintf(stderr, "Failed to allocate brick at (1,1,1)\n");
+	if (!brickMap.allocateBrickAt(0,0,0)) {
+		fprintf(stderr, "Failed to allocate brick at (%i,%i,%i)\n", 0,0,0);
 	}
 
-	Voxel* v = brickMap.getVoxelAt(1,1,1);
-	if (v == nullptr) {
-		fprintf(stderr, "Voxel at (1,1,1) is null\n");
+	if (!brickMap.allocateBrickAt(1,1,1)) {
+		fprintf(stderr, "Failed to allocate brick at (%i,%i,%i)\n", 1,0,0);
 	}
-
-	printf("Voxel at (1,1,1) has value %f\n", v->density);
 
 	{
 		ScopedTimer timer("BrickMap::Kernel");
     	accessBrick(brickMap);
 	}
 
-	Voxel* v2 = brickMap.getVoxelAt(1,1,1);
-	printf("After Kernel, Voxel at (1,1,1) has value %f\n", v2->density);
+	Voxel* brick = brickMap.getBrickAtHost(0,0,0);
+	Voxel* topBrick = brickMap.getBrickAtHost(1,1,1);
 
+	Voxel* v1 = &brick[0];
+	Voxel* v1b = &brick[32*32*32-1];
+	Voxel* v2 = &topBrick[0];
+	Voxel* v3 = &topBrick[-1];
+
+	printf("Brick %u: density Voxel 0 = %u\n", 0, v1->density);
+	printf("Brick %u: density Voxel 32767 = %u\n", 0, v1b->density);
+	printf("Brick %u: density Voxel 0 = %u\n", 1, v2->density);
+	printf("Brick %u: density Voxel -1 = %u\n", 1, v3->density);
 
 	std::cout << "BrickMap operations completed successfully.\n";
     /*// Main loop

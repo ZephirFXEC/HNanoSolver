@@ -1,17 +1,22 @@
 #include "BrickMap.cuh"
 
+
+__global__ void init_bricks(Brick* bricks, Voxel* voxel_base, uint32_t brick_volume) {
+	uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx < brick_volume) {
+		bricks[idx].data = voxel_base + idx * brick_volume;
+		bricks[idx].isLoaded = false;
+		bricks[idx].poolIndex = idx;
+	}
+}
+
 BrickPool::BrickPool(const uint32_t maxBricks) : m_maxBricks(maxBricks), m_numAllocatedBricks(0), d_bricks(nullptr), d_voxelData(nullptr) {
 	cudaMalloc(&d_bricks, m_maxBricks * sizeof(Brick));
 	cudaMalloc(&d_voxelData, m_maxBricks * Brick::VOLUME * sizeof(Voxel));
 
-	std::vector<Brick> hostBricks(maxBricks);
-	for (uint32_t i = 0; i < maxBricks; ++i) {
-		hostBricks[i].isLoaded = false;
-		hostBricks[i].poolIndex = i;
-		hostBricks[i].data = d_voxelData + i * Brick::VOLUME;
-	}
-
-	cudaMemcpy(d_bricks, hostBricks.data(), sizeof(Brick) * maxBricks, cudaMemcpyHostToDevice);
+	uint32_t blockSize = 256;
+	uint32_t gridSize = (m_maxBricks + blockSize - 1) / blockSize;
+	init_bricks<<<gridSize, blockSize>>>(d_bricks, d_voxelData, Brick::VOLUME);
 
 	m_freeIndices.resize(maxBricks);
 	for (uint32_t i = 0; i < maxBricks; ++i) {
@@ -71,7 +76,7 @@ BrickMap::~BrickMap() {
 bool BrickMap::allocateBrickAt(const uint32_t x, const uint32_t y, const uint32_t z) const {
 	if (x >= m_dimensions[0] || y >= m_dimensions[1] || z >= m_dimensions[2]) return false;
 
-	const uint32_t gridIndex = getGridIndex(x, y, z);
+	const uint32_t gridIndex = getBrickIndex(x, y, z);
 
 	// (Optional) Check if already allocated here.
 	const uint32_t index = m_pool->allocateBrick();
@@ -95,7 +100,7 @@ bool BrickMap::allocateBrickAt(const uint32_t x, const uint32_t y, const uint32_
 void BrickMap::deallocateBrickAt(const uint32_t x, const uint32_t y, const uint32_t z) const {
 	if (x >= m_dimensions[0] || y >= m_dimensions[1] || z >= m_dimensions[2]) return;
 
-	const uint32_t gridIndex = getGridIndex(x, y, z);
+	const uint32_t gridIndex = getBrickIndex(x, y, z);
 	uint32_t brickIndex;
 	cudaMemcpy(&brickIndex, d_grid + gridIndex, sizeof(uint32_t), cudaMemcpyDeviceToHost);
 
@@ -140,17 +145,22 @@ __host__ void BrickMap::processAllocationRequests() {
 	}
 }
 
-Voxel* BrickMap::getVoxelAt(const uint32_t x, const uint32_t y, const uint32_t z) const {
-	if (x >= m_dimensions[0] || y >= m_dimensions[1] || z >= m_dimensions[2]) return nullptr;
 
+Voxel* BrickMap::getBrickAtHost(const uint32_t x, const uint32_t y, const uint32_t z) const {
+	if (x >= m_dimensions[0] || y >= m_dimensions[1] || z >= m_dimensions[2]) {
+		printf("Coordinates out of bounds\n");
+		return nullptr;
+	}
+
+	// Get the brick index from the grid
 	uint32_t brickIdx;
-	cudaMemcpy(&brickIdx, d_grid + getGridIndex(x, y, z), sizeof(uint32_t), cudaMemcpyDeviceToHost);
+	cudaMemcpy(&brickIdx, d_grid + getBrickIndex(x, y, z), sizeof(uint32_t), cudaMemcpyDeviceToHost);
 	if (brickIdx == UINT32_MAX) {
 		printf("Empty cell\n");
 		return nullptr;  // Empty cell
 	}
 
-	// Copy the brick structure from device memory.
+	// Copy the brick structure from device memory
 	Brick brick;
 	cudaMemcpy(&brick, m_pool->getDeviceBricks() + brickIdx, sizeof(Brick), cudaMemcpyDeviceToHost);
 	if (!brick.isLoaded) {
@@ -158,37 +168,92 @@ Voxel* BrickMap::getVoxelAt(const uint32_t x, const uint32_t y, const uint32_t z
 		return nullptr;  // Brick not loaded
 	}
 
-	// Compute pointer to the voxel data for this brick.
-	Voxel* brickData = m_pool->getDeviceVoxelData() + brickIdx * Brick::VOLUME;
+	// Allocate host memory for the entire brick's voxel data
+	Voxel* h_brickData = nullptr;
+	cudaMallocHost(&h_brickData, Brick::VOLUME * sizeof(Voxel));  // Allocate pinned host memory
 
-	Voxel* h_voxel = nullptr;
-	cudaMallocHost(&h_voxel, sizeof(Voxel));
-	cudaMemcpy(h_voxel, brickData, sizeof(Voxel), cudaMemcpyDeviceToHost);
+	cudaMemcpy(h_brickData, m_pool->getDeviceVoxelData() + brickIdx * Brick::VOLUME, Brick::VOLUME * sizeof(Voxel), cudaMemcpyDeviceToHost);
 
-	return h_voxel;
+	return h_brickData;
 }
+
+
+Voxel* BrickMap::getBrickAtDevice(const uint32_t x, const uint32_t y, const uint32_t z) const {
+	if (x >= m_dimensions[0] || y >= m_dimensions[1] || z >= m_dimensions[2]) {
+		printf("Coordinates out of bounds\n");
+		return nullptr;
+	}
+
+	// Get the brick index from the grid
+	uint32_t* brickIdx = d_grid + getBrickIndex(x, y, z);
+	if (*brickIdx == UINT32_MAX) {
+		printf("Empty cell\n");
+		return nullptr;  // Empty cell
+	}
+
+
+	// Copy the brick structure from device memory
+	const Brick* brick = m_pool->getDeviceBricks() + *brickIdx;
+	if (!brick->isLoaded) {
+		printf("Brick not loaded\n");
+		return nullptr;  // Brick not loaded
+	}
+
+	return brick->data;
+}
+
+__global__ void advectionKernel(uint32_t* grid, Brick* bricks, Voxel* voxelData, uint32_t dimX, uint32_t dimY, uint32_t dimZ,
+                                AllocationRequest* requests, RequestCounter* counter, float dt, float3 velocity) {
+	uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= dimX * dimY * dimZ) return;
+
+	// Calculate 3D position
+	uint32_t z = idx / (dimX * dimY);
+	uint32_t y = (idx % (dimX * dimY)) / dimX;
+	uint32_t x = idx % dimX;
+
+	// Calculate advection source position
+	float3 pos = make_float3(x - velocity.x * dt, y - velocity.y * dt, z - velocity.z * dt);
+
+	// Find source grid cell
+	int srcX = __float2int_rd(pos.x);
+	int srcY = __float2int_rd(pos.y);
+	int srcZ = __float2int_rd(pos.z);
+
+	// Check if source position is valid and has data
+	if (srcX >= 0 && srcX < dimX && srcY >= 0 && srcY < dimY && srcZ >= 0 && srcZ < dimZ) {
+		uint32_t srcIdx = srcX + srcY * dimX + srcZ * dimX * dimY;
+		uint32_t srcBrickIdx = grid[srcIdx];
+
+		// If source has data but destination doesn't, request allocation
+		if (srcBrickIdx != UINT32_MAX && grid[idx] == UINT32_MAX) {
+			BrickMap::requestAllocation(x, y, z, requests, counter);
+		}
+	}
+}
+
 
 __global__ void accessBrickKernel(const uint32_t* grid, const Brick* bricks, Voxel* voxelData, const uint32_t dimX, const uint32_t dimY,
                                   const uint32_t dimZ) {
-	uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-	uint32_t totalCells = dimX * dimY * dimZ;
+	const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+	const uint32_t totalCells = dimX * dimY * dimZ;
+
 	if (idx >= totalCells) return;
 
-	uint32_t brickIdx = grid[idx];
+	const uint32_t brickIdx = grid[idx];
 	if (brickIdx == UINT32_MAX) return;  // Empty cell
 
-	// Copy the brick structure from device memory.
-	Brick brick = bricks[brickIdx];
+	const Brick brick = bricks[brickIdx];
 	if (!brick.isLoaded) return;  // Brick not loaded
 
-	// Compute pointer to the voxel data for this brick.
 	Voxel* brickData = &voxelData[brickIdx * Brick::VOLUME];
 
-	brickData[0].density = 1.0f;
-	brickData[0].temperature = 1.0f;
-	brickData[0].fuel = 1.0f;
-	brickData[0].velocity = nanovdb::Vec3f(1.0f);
+	for (uint32_t voxelIdx = 0; voxelIdx < Brick::VOLUME; voxelIdx++) {
+		Voxel& voxel = brickData[voxelIdx];
+		voxel.density = voxelIdx;
+	}
 }
+
 
 extern "C" void accessBrick(const BrickMap& brickMap) {
 	printf("Kernel Launched\n");
@@ -197,8 +262,7 @@ extern "C" void accessBrick(const BrickMap& brickMap) {
 	Voxel* d_voxelData = brickMap.getPool()->getDeviceVoxelData();
 	const uint32_t* dim = brickMap.getDimensions();
 
-	dim3 blockSize(256);
-	dim3 gridSize((256 * 256 * 256 + blockSize.x - 1) / blockSize.x);
-
+	uint32_t blockSize = 256;
+	uint32_t gridSize = (dim[0] * dim[1] * dim[2] + blockSize - 1) / blockSize;
 	accessBrickKernel<<<gridSize, blockSize>>>(d_grid, d_bricks, d_voxelData, dim[0], dim[1], dim[2]);
 }
