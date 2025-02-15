@@ -136,7 +136,7 @@ void Renderer::drawBoundingBox(const Shader& shader, const glm::vec3& min, const
     glEnableVertexAttribArray(0);
 
     // Increase line width for better visibility.
-    glLineWidth(2.0f);
+    glLineWidth(1.0f);
 
     // Use the shader dedicated for drawing the bounding box.
     shader.use();

@@ -1,19 +1,23 @@
 // Application.cpp
 
 // Standard & third-party includes
-#include <iostream>
-#include <cmath>
+#include "Renderer.hpp"
+
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+
+#include "Application.hpp"
+
+#include <iostream>
+#include <cmath>
+
 #include <glm/gtc/matrix_transform.hpp>
 #include <vector>
 // Your own headers
 #include "OpenVDBLoader.hpp"
-#include "Renderer.hpp"
 #include "Shader.hpp"
 #include "Utils/GridBuilder.hpp"
 
-#include "Application.hpp"
 #include "BrickMap.cuh"
 
 extern "C" void accessBrick(const BrickMap& brickMap);
@@ -38,109 +42,102 @@ Application::Application()
       vdbLoader_(nullptr),
       renderer_(nullptr),
       shader_(nullptr),
-	  wireframe_(nullptr),
+      wireframe_(nullptr),
       vdbLoaded_(false),
       volumeTexture_(0),
-      vdbFilename_("C:/Users/zphrfx/Desktop/bunny_cloud.vdb")
-{
-}
+      vdbFilename_("C:/Users/zphrfx/Desktop/bunny_cloud.vdb") {}
 
-Application::~Application() {
-    cleanup();
-}
+BrickMap brickMap(256, 256, 256);
+std::vector<std::pair<nanovdb::Coord, nanovdb::Coord>> bboxes;
+std::vector<std::pair<nanovdb::Coord, float>> coordValue;
+
+
+Application::~Application() { cleanup(); }
 
 // -------------------------------------------------------------
 // Initialization
 // -------------------------------------------------------------
 bool Application::init() {
-    // Initialize GLFW
-    if (!glfwInit()) {
-        std::cerr << "Failed to initialize GLFW\n";
-        return false;
-    }
+	// Initialize GLFW
+	if (!glfwInit()) {
+		std::cerr << "Failed to initialize GLFW\n";
+		return false;
+	}
 
-    // Configure GLFW for OpenGL 3.3 Core Profile
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+	// Configure GLFW for OpenGL 3.3 Core Profile
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    // Create a windowed mode window and its OpenGL context
-    window_ = glfwCreateWindow(800, 600, "HNanoViewer", nullptr, nullptr);
-    if (!window_) {
-        std::cerr << "Failed to create GLFW window\n";
-        glfwTerminate();
-        return false;
-    }
-    glfwMakeContextCurrent(window_);
+	// Create a windowed mode window and its OpenGL context
+	window_ = glfwCreateWindow(800, 600, "HNanoViewer", nullptr, nullptr);
+	if (!window_) {
+		std::cerr << "Failed to create GLFW window\n";
+		glfwTerminate();
+		return false;
+	}
+	glfwMakeContextCurrent(window_);
 
-    // Set the pointer to this instance for callbacks
-    glfwSetWindowUserPointer(window_, this);
+	// Set the pointer to this instance for callbacks
+	glfwSetWindowUserPointer(window_, this);
 
-    // Register callbacks
-    glfwSetFramebufferSizeCallback(window_, framebufferSizeCallback);
-    glfwSetCursorPosCallback(window_, mouseCallback);
-    glfwSetScrollCallback(window_, scrollCallback);
+	// Register callbacks
+	glfwSetFramebufferSizeCallback(window_, framebufferSizeCallback);
+	glfwSetCursorPosCallback(window_, mouseCallback);
+	glfwSetScrollCallback(window_, scrollCallback);
 
-    // Set input mode (change as desired)
-    glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+	// Set input mode (change as desired)
+	glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
-    // Load OpenGL function pointers using GLAD
-    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
-        std::cerr << "Failed to initialize GLAD\n";
-        return false;
-    }
+	// Load OpenGL function pointers using GLAD
+	if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
+		std::cerr << "Failed to initialize GLAD\n";
+		return false;
+	}
 
-    // Initialize ImGui
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGui::StyleColorsDark();
-    ImGui_ImplGlfw_InitForOpenGL(window_, true);
-    ImGui_ImplOpenGL3_Init("#version 460 core");
+	// Initialize ImGui
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGui::StyleColorsDark();
+	ImGui_ImplGlfw_InitForOpenGL(window_, true);
+	ImGui_ImplOpenGL3_Init("#version 460 core");
 
-    // Initialize your components
-    vdbLoader_ = new OpenVDBLoader();
-    renderer_ = new Renderer();
-    renderer_->init();
-    shader_ = new Shader(
-        "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/vertex_shader.vert",
-        "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/fragment_shader.frag"
-    );
-	wireframe_ = new Shader(
-		"C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/vertex_shader.vert",
-		"C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/wireframe.frag"
-	);
+	// Initialize your components
+	vdbLoader_ = new OpenVDBLoader();
+	renderer_ = new Renderer();
+	renderer_->init();
+	shader_ = new Shader("C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/vertex_shader.vert",
+	                     "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/fragment_shader.frag");
+	wireframe_ = new Shader("C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/vertex_shader.vert",
+	                        "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/wireframe.frag");
 
-    return true;
+	vdbLoader_->loadVDB(vdbFilename_);
+	coordValue = vdbLoader_->getCoords();
+
+	return true;
 }
 
 // -------------------------------------------------------------
 // Input & Update
 // -------------------------------------------------------------
 void Application::processInput() {
-    if (glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-        glfwSetWindowShouldClose(window_, true);
+	if (glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window_, true);
 
-    float adjustedSpeed = cameraSpeed_ * deltaTime_;
+	float adjustedSpeed = cameraSpeed_ * deltaTime_;
 
-    if (glfwGetKey(window_, GLFW_KEY_W) == GLFW_PRESS)
-        cameraPos_ += adjustedSpeed * cameraFront_;
-    if (glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS)
-        cameraPos_ -= adjustedSpeed * cameraFront_;
-    if (glfwGetKey(window_, GLFW_KEY_A) == GLFW_PRESS)
-        cameraPos_ -= glm::normalize(glm::cross(cameraFront_, cameraUp_)) * adjustedSpeed;
-    if (glfwGetKey(window_, GLFW_KEY_D) == GLFW_PRESS)
-        cameraPos_ += glm::normalize(glm::cross(cameraFront_, cameraUp_)) * adjustedSpeed;
-	if (glfwGetKey(window_, GLFW_KEY_Q) == GLFW_PRESS)
-		cameraPos_ += glm::vec3(0, 1, 0) * adjustedSpeed;
-	if (glfwGetKey(window_, GLFW_KEY_E) == GLFW_PRESS)
-		cameraPos_ -= glm::vec3(0, 1, 0) * adjustedSpeed;
+	if (glfwGetKey(window_, GLFW_KEY_W) == GLFW_PRESS) cameraPos_ += adjustedSpeed * cameraFront_;
+	if (glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS) cameraPos_ -= adjustedSpeed * cameraFront_;
+	if (glfwGetKey(window_, GLFW_KEY_A) == GLFW_PRESS) cameraPos_ -= glm::normalize(glm::cross(cameraFront_, cameraUp_)) * adjustedSpeed;
+	if (glfwGetKey(window_, GLFW_KEY_D) == GLFW_PRESS) cameraPos_ += glm::normalize(glm::cross(cameraFront_, cameraUp_)) * adjustedSpeed;
+	if (glfwGetKey(window_, GLFW_KEY_Q) == GLFW_PRESS) cameraPos_ += glm::vec3(0, 1, 0) * adjustedSpeed;
+	if (glfwGetKey(window_, GLFW_KEY_E) == GLFW_PRESS) cameraPos_ -= glm::vec3(0, 1, 0) * adjustedSpeed;
 }
 
 void Application::update() {
-    // Update timing
-    float currentFrame = static_cast<float>(glfwGetTime());
-    deltaTime_ = currentFrame - lastFrame_;
-    lastFrame_ = currentFrame;
+	// Update timing
+	float currentFrame = static_cast<float>(glfwGetTime());
+	deltaTime_ = currentFrame - lastFrame_;
+	lastFrame_ = currentFrame;
 }
 
 // -------------------------------------------------------------
@@ -153,185 +150,193 @@ void Application::render() {
 	ImGui::NewFrame();
 
 	openvdb::math::BBox<openvdb::Vec3d> bbox;
-    // ImGui window for performance metrics and controls
-    {
-        float frameTime = deltaTime_ * 1000.0f;
-        float fps = 1.0f / deltaTime_;
-        ImGui::Begin("Performance Metrics");
-        ImGui::Text("Frame Time: %.3f ms", frameTime);
-        ImGui::Text("FPS: %.1f", fps);
+	// ImGui window for performance metrics and controls
+	{
+		float frameTime = deltaTime_ * 1000.0f;
+		float fps = 1.0f / deltaTime_;
+		ImGui::Begin("Performance Metrics");
+		ImGui::Text("Frame Time: %.3f ms", frameTime);
+		ImGui::Text("FPS: %.1f", fps);
 
-        // VDB load/run buttons
-        if (ImGui::Button("Load VDB File"))
-            vdbLoader_->loadVDB(vdbFilename_);
-        if (ImGui::Button("Run Kernels")) {
-            auto pBaseGrid = vdbLoader_->getGridBase();
-            if (!pBaseGrid) {
-                std::cerr << "Error: Grid is not loaded." << std::endl;
-            } else {
-                auto grid = openvdb::gridPtrCast<openvdb::FloatGrid>(pBaseGrid);
-                HNS::GridIndexedData gridData;
-                HNS::IndexGridBuilder<openvdb::FloatGrid> indexGridBuilder(grid, &gridData);
-                indexGridBuilder.addGrid(grid, "density");
-                indexGridBuilder.build();
+		// VDB load/run buttons
+		if (ImGui::Button("Run Kernels")) {
+			auto pBaseGrid = vdbLoader_->getGridBase();
+			if (!pBaseGrid) {
+				std::cerr << "Error: Grid is not loaded." << std::endl;
+			} else {
+				auto grid = openvdb::gridPtrCast<openvdb::FloatGrid>(pBaseGrid);
+				HNS::GridIndexedData gridData;
+				HNS::IndexGridBuilder<openvdb::FloatGrid> indexGridBuilder(grid, &gridData);
+				indexGridBuilder.addGrid(grid, "density");
+				indexGridBuilder.build();
 
-                vdbLoaded_ = vdbLoader_->VDBToTexture(volumeTexture_, &gridData, bbox);
-            }
-        }
-        ImGui::Text("VDB File: %s", vdbFilename_.c_str());
-        ImGui::End();
-    }
+				vdbLoaded_ = vdbLoader_->VDBToTexture(volumeTexture_, &gridData, bbox);
+			}
+		}
+		ImGui::Text("VDB File: %s", vdbFilename_.c_str());
+		ImGui::End();
+	}
 
-    // Clear and configure OpenGL state
-    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glEnable(GL_DEPTH_TEST);
+	// Clear and configure OpenGL state
+	glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glEnable(GL_DEPTH_TEST);
 
-    // Set up camera matrices
-    glm::mat4 view = glm::lookAt(cameraPos_, cameraPos_ + cameraFront_, cameraUp_);
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 500.0f);
+	// Set up camera matrices
+	glm::mat4 view = glm::lookAt(cameraPos_, cameraPos_ + cameraFront_, cameraUp_);
+	glm::mat4 projection = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 500.0f);
 
-    // Render if the volume texture is ready
-    if (vdbLoaded_) {
 
-    	glm::vec3 worldMin(bbox.min().x(), bbox.min().y(), bbox.min().z());
-    	glm::vec3 worldMax(bbox.max().x(), bbox.max().y(), bbox.max().z());
-    	glm::vec3 size = worldMax - worldMin;
-    	glm::vec3 center = (worldMin + worldMax) / 2.0f;
-    	glm::mat4 modelMatrix = glm::mat4(1.0f); // glm::translate(glm::mat4(1.0f), center) * glm::scale(glm::mat4(1.0f), size);
+	// Render if the volume texture is ready
+	if (vdbLoaded_) {
+		glm::vec3 worldMin(bbox.min().x(), bbox.min().y(), bbox.min().z());
+		glm::vec3 worldMax(bbox.max().x(), bbox.max().y(), bbox.max().z());
+		glm::mat4 modelMatrix = glm::mat4(1.0f);  // glm::translate(glm::mat4(1.0f), center) * glm::scale(glm::mat4(1.0f), size);
 
-	    renderer_->render(*shader_, volumeTexture_, cameraPos_, view, projection, modelMatrix);
-    	renderer_->drawBoundingBox(*wireframe_, glm::vec3(-1,-1,-1), glm::vec3(1,1,1), view, projection, modelMatrix);
+		renderer_->render(*shader_, volumeTexture_, cameraPos_, view, projection, modelMatrix);
 
-    }
-    // Render ImGui
-    ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+		for (const auto brickbbox : bboxes) {
+			glm::vec3 min = glm::vec3(brickbbox.first[0], brickbbox.first[1], brickbbox.first[2]);
+			glm::vec3 max = glm::vec3(brickbbox.second[0], brickbbox.second[1], brickbbox.second[2]);
 
-    glfwSwapBuffers(window_);
-    glfwPollEvents();
+			renderer_->drawBoundingBox(*wireframe_, min, max, view, projection, glm::mat4(1.0f));
+		}
+
+	}
+	// Render ImGui
+	ImGui::Render();
+	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+	glfwSwapBuffers(window_);
+	glfwPollEvents();
 }
-
 
 
 // -------------------------------------------------------------
 // Main Loop
 // -------------------------------------------------------------
 int Application::run() {
-    if (!init())
-        return -1;
-
-	BrickMap brickMap(256, 256, 256);
-
-	if (!brickMap.allocateBrickAt(0,0,0)) {
-		fprintf(stderr, "Failed to allocate brick at (%i,%i,%i)\n", 0,0,0);
+	if (!init()) return -1;
+	{
+		ScopedTimer timer("BrickMap::FromVDB");
+		brickMap.buildFromVDB(coordValue);
 	}
 
-	if (!brickMap.allocateBrickAt(1,1,1)) {
-		fprintf(stderr, "Failed to allocate brick at (%i,%i,%i)\n", 1,0,0);
+
+	/*
+	{
+		ScopedTimer timer("BrickMap::DeallocatedEmpty");
+		brickMap.deallocateInactive();
 	}
 
 	{
-		ScopedTimer timer("BrickMap::Kernel");
-    	accessBrick(brickMap);
+		ScopedTimer timer("BrickMap::KernelAccess");
+		accessBrick(brickMap);
+	}
+	*/
+
+
+	std::vector<nanovdb::Coord> brickCoords;
+
+	{
+		ScopedTimer timer("BrickMap::GetBrickCoords");
+		brickCoords = brickMap.getActiveBricks();
+		printf("Active bricks: %llu\n", brickCoords.size());
 	}
 
-	Voxel* brick = brickMap.getBrickAtHost(0,0,0);
-	Voxel* topBrick = brickMap.getBrickAtHost(1,1,1);
+	for (const auto& brick : brickCoords) {
+		bboxes.push_back(brickMap.getBrickDimensions(brick[0], brick[1], brick[2]));
+	}
 
-	Voxel* v1 = &brick[0];
-	Voxel* v1b = &brick[32*32*32-1];
-	Voxel* v2 = &topBrick[0];
-	Voxel* v3 = &topBrick[-1];
+	/*if (!brickMap.allocateBrickAt({0,0,0})) {
+		printf("Failed to allocate brick\n");
+	}
 
-	printf("Brick %u: density Voxel 0 = %u\n", 0, v1->density);
-	printf("Brick %u: density Voxel 32767 = %u\n", 0, v1b->density);
-	printf("Brick %u: density Voxel 0 = %u\n", 1, v2->density);
-	printf("Brick %u: density Voxel -1 = %u\n", 1, v3->density);
+	{
+		ScopedTimer timer("BrickMap::KernelAccess");
+		accessBrick(brickMap);
+	}
 
-	std::cout << "BrickMap operations completed successfully.\n";
-    /*// Main loop
-    while (!glfwWindowShouldClose(window_)) {
-        update();
-        processInput();
-        render();
-    }*/
+	Voxel* voxels = brickMap.getBrickAtHost(0,0,0);
+	for (int i = 0; i < 16; i++) {
+		printf("Voxel %d: %f\n", i, voxels[i].density);
+	}*/
+
+	// Main loop
+	while (!glfwWindowShouldClose(window_)) {
+		update();
+		processInput();
+		render();
+	}
 
 
-    return 0;
+	return 0;
 }
 
 // -------------------------------------------------------------
 // Cleanup
 // -------------------------------------------------------------
 void Application::cleanup() {
-    // Shutdown ImGui
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
+	// Shutdown ImGui
+	ImGui_ImplOpenGL3_Shutdown();
+	ImGui_ImplGlfw_Shutdown();
+	ImGui::DestroyContext();
 
-    if (window_)
-        glfwDestroyWindow(window_);
-    glfwTerminate();
+	if (window_) glfwDestroyWindow(window_);
+	glfwTerminate();
 
-    // Free dynamically allocated resources
-    delete shader_;
+	// Free dynamically allocated resources
+	delete shader_;
 	delete wireframe_;
-    delete renderer_;
-    delete vdbLoader_;
+	delete renderer_;
+	delete vdbLoader_;
 }
 
 // -------------------------------------------------------------
 // Static Callback Functions
 // -------------------------------------------------------------
-void Application::framebufferSizeCallback(GLFWwindow* window, int width, int height) {
-    glViewport(0, 0, width, height);
-}
+void Application::framebufferSizeCallback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
 
 void Application::mouseCallback(GLFWwindow* window, double xpos, double ypos) {
-    Application* app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
-    if (!app) return;
-    if (ImGui::GetIO().WantCaptureMouse) return;
+	Application* app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
+	if (!app) return;
+	if (ImGui::GetIO().WantCaptureMouse) return;
 
-    if (app->firstMouse_) {
-        app->lastX_ = static_cast<float>(xpos);
-        app->lastY_ = static_cast<float>(ypos);
-        app->firstMouse_ = false;
-    }
+	if (app->firstMouse_) {
+		app->lastX_ = static_cast<float>(xpos);
+		app->lastY_ = static_cast<float>(ypos);
+		app->firstMouse_ = false;
+	}
 
-    float xoffset = static_cast<float>(xpos) - app->lastX_;
-    float yoffset = app->lastY_ - static_cast<float>(ypos); // y offset is reversed
-    app->lastX_ = static_cast<float>(xpos);
-    app->lastY_ = static_cast<float>(ypos);
+	float xoffset = static_cast<float>(xpos) - app->lastX_;
+	float yoffset = app->lastY_ - static_cast<float>(ypos);  // y offset is reversed
+	app->lastX_ = static_cast<float>(xpos);
+	app->lastY_ = static_cast<float>(ypos);
 
-    float sensitivity = 0.2f;
-    xoffset *= sensitivity;
-    yoffset *= sensitivity;
+	float sensitivity = 0.2f;
+	xoffset *= sensitivity;
+	yoffset *= sensitivity;
 
-    app->yaw_ += xoffset;
-    app->pitch_ += yoffset;
+	app->yaw_ += xoffset;
+	app->pitch_ += yoffset;
 
-    // Constrain the pitch angle
-    if (app->pitch_ > 89.0f)
-        app->pitch_ = 89.0f;
-    if (app->pitch_ < -89.0f)
-        app->pitch_ = -89.0f;
+	// Constrain the pitch angle
+	if (app->pitch_ > 89.0f) app->pitch_ = 89.0f;
+	if (app->pitch_ < -89.0f) app->pitch_ = -89.0f;
 
-    glm::vec3 front;
-    front.x = cos(glm::radians(app->yaw_)) * cos(glm::radians(app->pitch_));
-    front.y = sin(glm::radians(app->pitch_));
-    front.z = sin(glm::radians(app->yaw_)) * cos(glm::radians(app->pitch_));
-    app->cameraFront_ = glm::normalize(front);
+	glm::vec3 front;
+	front.x = cos(glm::radians(app->yaw_)) * cos(glm::radians(app->pitch_));
+	front.y = sin(glm::radians(app->pitch_));
+	front.z = sin(glm::radians(app->yaw_)) * cos(glm::radians(app->pitch_));
+	app->cameraFront_ = glm::normalize(front);
 }
 
 void Application::scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
-    Application* app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
-    if (!app) return;
-    if (ImGui::GetIO().WantCaptureMouse) return;
+	Application* app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
+	if (!app) return;
+	if (ImGui::GetIO().WantCaptureMouse) return;
 
-    app->fov_ -= static_cast<float>(yoffset);
-    if (app->fov_ < 1.0f)
-        app->fov_ = 1.0f;
-    if (app->fov_ > 90.0f)
-        app->fov_ = 90.0f;
+	app->fov_ -= static_cast<float>(yoffset);
+	if (app->fov_ < 1.0f) app->fov_ = 1.0f;
+	if (app->fov_ > 90.0f) app->fov_ = 90.0f;
 }

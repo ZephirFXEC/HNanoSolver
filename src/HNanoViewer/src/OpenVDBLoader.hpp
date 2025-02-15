@@ -6,6 +6,7 @@
 
 #include <glad/glad.h>
 #include <openvdb/openvdb.h>
+#include <nanovdb/math/Math.h>
 
 #include <glm/glm.hpp>
 #include <string>
@@ -21,7 +22,7 @@ class OpenVDBLoader {
 
 	bool loadVDB(const std::string& filename);
 	bool VDBToTexture(GLuint& volumeTexture, HNS::GridIndexedData* in_data, openvdb::math::BBox<openvdb::Vec3d>& bbox) const;
-
+	std::vector<std::pair<nanovdb::Coord, float>>  getCoords() const;
    private:
 	static void initialize();
 	static void shutdown();

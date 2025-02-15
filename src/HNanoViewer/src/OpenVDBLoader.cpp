@@ -4,6 +4,8 @@
 
 #include "OpenVDBLoader.hpp"
 
+#include <nanovdb/math/Math.h>
+
 #include <Utils/GridBuilder.hpp>
 #include <iostream>
 
@@ -39,6 +41,26 @@ bool OpenVDBLoader::loadVDB(const std::string& filename) {
 	file.close();
 
 	return true;
+}
+
+std::vector<std::pair<nanovdb::Coord, float>> OpenVDBLoader::getCoords() const {
+	const openvdb::FloatGrid::Ptr grid = openvdb::gridPtrCast<openvdb::FloatGrid>(pBaseGrid);
+	const auto accessor = grid->getAccessor();
+
+	std::vector<std::pair<nanovdb::Coord, float>> coords(grid->activeVoxelCount());
+	openvdb::Coord minbbox =  grid->evalActiveVoxelBoundingBox().min();
+
+	for (auto iter = grid->tree().beginValueOn(); iter.test(); ++iter) {
+		const openvdb::Coord coord = iter.getCoord();
+		const float value = iter.getValue();
+
+		openvdb::Coord toplus = coord - minbbox;
+		nanovdb::Coord pCoords(toplus.x(), toplus.y(), toplus.z());
+
+		coords.emplace_back(pCoords, value);
+	}
+
+	return coords;
 }
 
 bool OpenVDBLoader::VDBToTexture(GLuint& volumeTexture, HNS::GridIndexedData* in_data, openvdb::math::BBox<openvdb::Vec3d>& bbox) const {
