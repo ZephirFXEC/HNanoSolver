@@ -1,4 +1,5 @@
-# HNanoSolver
+
+# [HNanoSolver](https://youtu.be/W5Qsye3BMng)
 > This is a project used to learn Fluid Dynamics and GPU acceleration through Cuda.
 - **HNanoSolver**, All in one node computing a quantity advection by a divergence free velocity field on the GPU.
 - **HNanoProjectNonDivergent**, Compute a Divergence free velocity field on the GPU.
