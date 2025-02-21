@@ -1,8 +1,6 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <device_atomic_functions.h>
-#include <device_launch_parameters.h>
 #include <nanovdb/math/Math.h>
 #include <nanovdb/util/cuda/Util.h>
 
@@ -19,25 +17,80 @@
 	}
 
 
+namespace BrickConfig {
 constexpr uint32_t BRICK_SIZE = 32;
 constexpr uint32_t DEFAULT_GRID_DIM = 256;
 constexpr size_t MAX_BRICKS = 128 * 128;
 constexpr size_t MAX_ALLOCATION_REQUESTS = MAX_BRICKS;
 constexpr uint32_t GLOBAL_GRID_SIZE = BRICK_SIZE * DEFAULT_GRID_DIM;
-constexpr uint32_t ALLOC_PENDING_MARKER = 0xFFFFFFFE;
-constexpr uint32_t INACTIVE = UINT32_MAX;
+enum BrickStatus : uint32_t { INACTIVE = UINT32_MAX, ALLOC_PENDING = 0xFFFFFFFE };
+}  // namespace BrickConfig
 
+// Forward declarations
 struct Voxel;
-struct VoxelUpdate;
 struct Brick;
-struct BrickPool;
+class BrickPool;
 class BrickMap;
-struct EmptyBrickInfo;
 
-typedef uint32_t BrickIndex;
-typedef uint32_t VoxelIndex;
-typedef nanovdb::Coord BrickCoord;
-typedef nanovdb::Coord VoxelCoord;
+using BrickIndex = uint32_t;
+using VoxelIndex = uint32_t;
+using Dim = nanovdb::math::Vec3<uint8_t>;
+using BrickCoord = nanovdb::math::Vec3<uint8_t>;
+using VoxelCoordLocal = nanovdb::math::Vec3<uint16_t>;
+using VoxelCoordGlobal = nanovdb::math::Vec3<uint32_t>;
+
+
+namespace BrickMath {
+
+__hostdev__ inline uint32_t getBrickIndex(const BrickCoord& coord, const Dim dims) {
+	return coord[0] + coord[1] * dims[0] + coord[2] * dims[0] * dims[1];
+}
+__hostdev__ inline BrickCoord getBrickGridIdxToCoord(const uint32_t idx, const Dim dims) {
+	return BrickCoord(idx % dims[0], (idx / dims[0]) % dims[1], idx / (dims[0] * dims[1]));
+}
+
+__hostdev__ inline bool isValidGlobalVoxelCoord(const VoxelCoordGlobal& global) {
+	return global[0] < BrickConfig::GLOBAL_GRID_SIZE && global[1] < BrickConfig::GLOBAL_GRID_SIZE &&
+	       global[2] < BrickConfig::GLOBAL_GRID_SIZE;
+}
+
+__hostdev__ inline VoxelCoordLocal globalToLocalCoord(const VoxelCoordGlobal& global) {
+	return VoxelCoordLocal(global[0] % BrickConfig::BRICK_SIZE, global[1] % BrickConfig::BRICK_SIZE, global[2] % BrickConfig::BRICK_SIZE);
+}
+
+__hostdev__ inline VoxelCoordGlobal localToGlobalCoord(const BrickCoord& brick, const VoxelCoordLocal& local) {
+	return VoxelCoordGlobal(brick[0] * BrickConfig::BRICK_SIZE + local[0], brick[1] * BrickConfig::BRICK_SIZE + local[1],
+	                        brick[2] * BrickConfig::BRICK_SIZE + local[2]);
+}
+
+__hostdev__ inline VoxelCoordGlobal localToGlobalCoord(const uint32_t brickidx, const VoxelCoordLocal& local) {
+	return localToGlobalCoord(getBrickGridIdxToCoord(brickidx, Dim(BrickConfig::DEFAULT_GRID_DIM)), local);
+}
+
+__hostdev__ inline uint32_t localToVoxelIdx(const VoxelCoordLocal& local) {
+	return local[0] + local[1] * BrickConfig::BRICK_SIZE + local[2] * BrickConfig::BRICK_SIZE * BrickConfig::BRICK_SIZE;
+}
+
+__hostdev__ inline VoxelCoordLocal voxelIdxToLocal(const uint32_t idx) {
+	return VoxelCoordLocal(idx % BrickConfig::BRICK_SIZE, (idx / BrickConfig::BRICK_SIZE) % BrickConfig::BRICK_SIZE,
+	                       idx / (BrickConfig::BRICK_SIZE * BrickConfig::BRICK_SIZE));
+}
+
+__hostdev__ inline BrickCoord getBrickCoord(const VoxelCoordGlobal& global) {
+	return BrickCoord(global[0] / BrickConfig::BRICK_SIZE, global[1] / BrickConfig::BRICK_SIZE, global[2] / BrickConfig::BRICK_SIZE);
+}
+
+__hostdev__ inline bool isValidLocalCoord(const VoxelCoordLocal& local) {
+	return local[0] < BrickConfig::BRICK_SIZE && local[1] < BrickConfig::BRICK_SIZE && local[2] < BrickConfig::BRICK_SIZE;
+}
+
+
+__hostdev__ inline bool isValidBrickCoord(const BrickCoord& coord, const Dim dims) {
+	return coord[0] < dims[0] && coord[1] < dims[1] && coord[2] < dims[2];
+}
+
+
+}  // namespace BrickMath
 
 struct AllocationRequest {
 	BrickCoord coord{};
@@ -69,25 +122,25 @@ struct Voxel {
 	}
 };
 
-
-/// @brief Linear Array of Voxel and occupancy count.
 struct Brick {
-	static constexpr uint32_t VOLUME = BRICK_SIZE * BRICK_SIZE * BRICK_SIZE;
+	static constexpr uint32_t VOLUME = BrickConfig::BRICK_SIZE * BrickConfig::BRICK_SIZE * BrickConfig::BRICK_SIZE;
+	/// @brief Array of voxels in brick from [0 to 32^2 - 1].
 	Voxel* data = nullptr;
 	bool isLoaded = false;
-	uint32_t poolIndex = INACTIVE;
 };
 
 
-struct BrickPool {
-	explicit BrickPool(uint32_t maxBricks = MAX_BRICKS);
+class BrickPool {
+   public:
+	explicit BrickPool(uint32_t maxBricks);
 	~BrickPool();
 
 	uint32_t allocateBrick();
 	void deallocateBrick(uint32_t index);
 
-	[[nodiscard]] __hostdev__ Brick* getDeviceBricks() const { return d_bricks; }
-	[[nodiscard]] __hostdev__ Voxel* getDeviceVoxelData() const { return d_voxelData; }
+	__hostdev__ Brick* getDeviceBricks() const { return d_bricks; }
+	__hostdev__ Voxel* getDeviceVoxelData() const { return d_voxelData; }
+	__hostdev__ uint32_t getNumAllocatedBricks() const { return m_numAllocatedBricks; }
 
    private:
 	size_t m_maxBricks;
@@ -100,8 +153,7 @@ struct BrickPool {
 
 class BrickMap {
    public:
-	explicit BrickMap(uint32_t dimX = DEFAULT_GRID_DIM, uint32_t dimY = DEFAULT_GRID_DIM, uint32_t dimZ = DEFAULT_GRID_DIM);
-
+	explicit BrickMap(Dim dim = Dim(BrickConfig::DEFAULT_GRID_DIM));
 	~BrickMap();
 
 	void buildFromVDB(const std::vector<std::pair<nanovdb::Coord, float>>& data) const;
@@ -109,96 +161,31 @@ class BrickMap {
 	void deallocateBrickAt(const BrickCoord& coord) const;
 	void deallocateInactive() const;
 
+	[[nodiscard]] __hostdev__ uint32_t* getDeviceGrid() const { return d_grid; }
+	[[nodiscard]] __hostdev__ BrickPool* getPool() { return m_pool; }
+	[[nodiscard]] __hostdev__ const BrickPool* getPool() const { return m_pool; }
+	[[nodiscard]] __hostdev__ Dim getDimensions() const { return m_dimensions; }
 
-	[[nodiscard]] uint32_t* getDeviceGrid() const { return d_grid; }
-	[[nodiscard]] BrickPool* getPool() { return m_pool.get(); }
+	__host__ std::vector<BrickCoord> getActiveBricks() const;
+	__host__ Voxel* getBrickAtHost(const BrickCoord& coord) const;
 
-	[[nodiscard]] const BrickPool* getPool() const { return m_pool.get(); }
-	[[nodiscard]] const uint32_t* getDimensions() const { return m_dimensions; }
-
-
-	__host__ std::vector<nanovdb::Coord> getActiveBricks() const;
-	__host__ Voxel* getBrickAtHost(uint32_t x, uint32_t y, uint32_t z) const;
-	__host__ std::pair<nanovdb::Coord, nanovdb::Coord> getBrickDimensions(uint32_t x, uint32_t y, uint32_t z) const;
 	__host__ void processAllocationRequests() const;
 
-	__device__ Voxel* getBrickAtDevice(uint32_t x, uint32_t y, uint32_t z) const;
+	__device__ Voxel* getBrickAtDevice(const BrickCoord& coord) const;
 	__device__ static void requestAllocation(const BrickCoord& coord, AllocationRequest* req, RequestCounter* counter);
 
-	__hostdev__ uint32_t getBrickIndex(const BrickCoord& coord) const {
-		return coord.x() + coord.y() * m_dimensions[0] + coord.z() * m_dimensions[0] * m_dimensions[1];
-	}
-
-	__hostdev__ uint32_t getBrickIndex(const uint32_t x, const uint32_t y, const uint32_t z) const {
-		return x + y * m_dimensions[0] + z * m_dimensions[0] * m_dimensions[1];
-	}
-
-	__hostdev__ Voxel* getBrickFirstVoxel(const BrickCoord& coord) const {
-		const uint32_t brickIdx = getBrickIndex(coord);
-		if (!isBrickActive(coord)) return nullptr;  // Check if brick is loaded
-		return m_pool->getDeviceVoxelData() + brickIdx * Brick::VOLUME;
-	}
-
-	__hostdev__ Voxel* getVoxel(const BrickCoord& brickCoord, const VoxelCoord& localCoord) const {
-		if (localCoord.x() >= BRICK_SIZE || localCoord.y() >= BRICK_SIZE || localCoord.z() >= BRICK_SIZE) {
-			return nullptr;  // Out of bounds
-		}
-
-		uint32_t* brickidx = d_grid + getBrickIndex(brickCoord);
-		if (*brickidx == UINT32_MAX) {
-			return nullptr;  // Empty cell
-		}
-
-		Brick* brick = m_pool->getDeviceBricks() + *brickidx;
-		if (!brick->isLoaded) {
-			return nullptr;  // Brick not loaded
-		}
-
-		return brick->data + localCoord.x() + localCoord.y() * BRICK_SIZE + localCoord.z() * BRICK_SIZE * BRICK_SIZE;
-	}
-
-	__hostdev__ Voxel* getVoxel(const VoxelCoord& coord) const {
-		// Check if voxel coordinates are within the global grid
-		if (coord.x() >= GLOBAL_GRID_SIZE || coord.y() >= GLOBAL_GRID_SIZE || coord.z() >= GLOBAL_GRID_SIZE) {
-			return nullptr;  // Out of bounds
-		}
-		// Convert global voxel coordinates to brick coordinates
-		const uint32_t brickX = coord.x() / BRICK_SIZE;
-		const uint32_t brickY = coord.y() / BRICK_SIZE;
-		const uint32_t brickZ = coord.z() / BRICK_SIZE;
-
-		const BrickCoord brickCoord(brickX, brickY, brickZ);
-
-		// Get the first voxel of the brick
-		Voxel* firstVoxel = getBrickFirstVoxel(brickCoord);
-		if (firstVoxel == nullptr) return nullptr;  // Brick not loaded
-
-		// Compute local voxel coordinates within the brick
-		const uint32_t localX = coord.x() % BRICK_SIZE;
-		const uint32_t localY = coord.y() % BRICK_SIZE;
-		const uint32_t localZ = coord.z() % BRICK_SIZE;
-
-		// Compute the voxel index within the brick
-		const uint32_t voxelIndex = localX + localY * BRICK_SIZE + localZ * BRICK_SIZE * BRICK_SIZE;
-
-		return firstVoxel + voxelIndex;
-	}
-
-	__hostdev__ bool isBrickActive(const BrickCoord& coord) const {
-		const Brick* bricks = m_pool->getDeviceBricks();
-		return bricks[getBrickIndex(coord)].isLoaded;
-	}
-
+	AllocationRequest* getDeviceAllocationRequests() const { return d_allocationRequests; }
+	RequestCounter* getDeviceRequestCounter() const { return d_requestCounter; }
 
    private:
-	uint32_t m_dimensions[3];
-	std::unique_ptr<BrickPool> m_pool;
+	Dim m_dimensions;
+	BrickPool* m_pool;
 	uint32_t* d_grid;
-
-	// Computes the 1D index into the grid array from 3D coordinates.
 
 	AllocationRequest* d_allocationRequests = nullptr;
 	RequestCounter* d_requestCounter = nullptr;
-
 	EmptyBrickInfo* d_emptyBricks = nullptr;
 };
+
+
+

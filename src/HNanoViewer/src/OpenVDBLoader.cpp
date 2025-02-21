@@ -48,7 +48,7 @@ std::vector<std::pair<nanovdb::Coord, float>> OpenVDBLoader::getCoords() const {
 	const auto accessor = grid->getAccessor();
 
 	std::vector<std::pair<nanovdb::Coord, float>> coords(grid->activeVoxelCount());
-	openvdb::Coord minbbox =  grid->evalActiveVoxelBoundingBox().min();
+	openvdb::Coord minbbox = grid->evalActiveVoxelBoundingBox().min();
 
 	for (auto iter = grid->tree().beginValueOn(); iter.test(); ++iter) {
 		const openvdb::Coord coord = iter.getCoord();

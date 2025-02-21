@@ -18,16 +18,20 @@
 #include "Shader.hpp"
 #include "Utils/GridBuilder.hpp"
 
-#include "BrickMap.cuh"
 
-extern "C" void accessBrick(const BrickMap& brickMap);
 
+extern "C" {
+	extern "C" void accessBrick(const BrickMap& brickMap);
+	extern "C" void advect(const BrickMap& brickMap, float dt);
+	void Create(VolumeTexture* volumeTexture, const BrickMap* brickMap);
+	void Update(VolumeTexture* volumeTexture, const BrickMap* brickMap);
+}
 // -------------------------------------------------------------
 // Constructor & Destructor
 // -------------------------------------------------------------
 Application::Application()
     : window_(nullptr),
-      cameraPos_(5.0f, 0.0f, 0.0f),
+      cameraPos_(0, 0, 0),
       cameraFront_(0.0f, 0.0f, -1.0f),
       cameraUp_(0.0f, 1.0f, 0.0f),
       cameraSpeed_(5.0f),
@@ -39,15 +43,13 @@ Application::Application()
       pitch_(0.0f),
       firstMouse_(true),
       fov_(45.0f),
-      vdbLoader_(nullptr),
       renderer_(nullptr),
       shader_(nullptr),
       wireframe_(nullptr),
       vdbLoaded_(false),
-      volumeTexture_(0),
       vdbFilename_("C:/Users/zphrfx/Desktop/bunny_cloud.vdb") {}
 
-BrickMap brickMap(256, 256, 256);
+BrickMap brickMap(Dim(8, 8, 8));
 std::vector<std::pair<nanovdb::Coord, nanovdb::Coord>> bboxes;
 std::vector<std::pair<nanovdb::Coord, float>> coordValue;
 
@@ -103,7 +105,6 @@ bool Application::init() {
 	ImGui_ImplOpenGL3_Init("#version 460 core");
 
 	// Initialize your components
-	vdbLoader_ = new OpenVDBLoader();
 	renderer_ = new Renderer();
 	renderer_->init();
 	shader_ = new Shader("C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/vertex_shader.vert",
@@ -111,8 +112,7 @@ bool Application::init() {
 	wireframe_ = new Shader("C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/vertex_shader.vert",
 	                        "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/wireframe.frag");
 
-	vdbLoader_->loadVDB(vdbFilename_);
-	coordValue = vdbLoader_->getCoords();
+	//Create(&volumeTex_, &brickMap);
 
 	return true;
 }
@@ -138,6 +138,31 @@ void Application::update() {
 	float currentFrame = static_cast<float>(glfwGetTime());
 	deltaTime_ = currentFrame - lastFrame_;
 	lastFrame_ = currentFrame;
+
+	bboxes.clear();
+
+
+	advect(brickMap, 1.0f/24.0f);
+
+
+
+	Voxel* v1 = brickMap.getBrickAtHost(BrickCoord(0, 0, 0));
+
+	for (int i = 0; i < 16; i++) {
+		printf("Brick 0 %d: %f\n", i, v1[i].density);
+	}
+
+
+	const std::vector<BrickCoord> brickCoords = brickMap.getActiveBricks();
+	printf("Active bricks: %llu\n", brickCoords.size());
+
+	for (const auto& brick : brickCoords) {
+		nanovdb::Coord min = {brick[0], brick[1], brick[2]};
+		nanovdb::Coord max = {brick[0] + 1, brick[1] + 1, brick[2] + 1};
+		bboxes.emplace_back(min, max);
+	}
+
+	//Update(&volumeTex_, &brickMap);
 }
 
 // -------------------------------------------------------------
@@ -157,23 +182,7 @@ void Application::render() {
 		ImGui::Begin("Performance Metrics");
 		ImGui::Text("Frame Time: %.3f ms", frameTime);
 		ImGui::Text("FPS: %.1f", fps);
-
-		// VDB load/run buttons
-		if (ImGui::Button("Run Kernels")) {
-			auto pBaseGrid = vdbLoader_->getGridBase();
-			if (!pBaseGrid) {
-				std::cerr << "Error: Grid is not loaded." << std::endl;
-			} else {
-				auto grid = openvdb::gridPtrCast<openvdb::FloatGrid>(pBaseGrid);
-				HNS::GridIndexedData gridData;
-				HNS::IndexGridBuilder<openvdb::FloatGrid> indexGridBuilder(grid, &gridData);
-				indexGridBuilder.addGrid(grid, "density");
-				indexGridBuilder.build();
-
-				vdbLoaded_ = vdbLoader_->VDBToTexture(volumeTexture_, &gridData, bbox);
-			}
-		}
-		ImGui::Text("VDB File: %s", vdbFilename_.c_str());
+		ImGui::Text("Camera Position: (%.2f, %.2f, %.2f)", cameraPos_.x, cameraPos_.y, cameraPos_.z);
 		ImGui::End();
 	}
 
@@ -186,23 +195,23 @@ void Application::render() {
 	glm::mat4 view = glm::lookAt(cameraPos_, cameraPos_ + cameraFront_, cameraUp_);
 	glm::mat4 projection = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 500.0f);
 
+	for (const auto brickbbox : bboxes) {
+		glm::vec3 min = glm::vec3(brickbbox.first[0], brickbbox.first[1], brickbbox.first[2]);
+		glm::vec3 max = glm::vec3(brickbbox.second[0], brickbbox.second[1], brickbbox.second[2]);
 
-	// Render if the volume texture is ready
-	if (vdbLoaded_) {
-		glm::vec3 worldMin(bbox.min().x(), bbox.min().y(), bbox.min().z());
-		glm::vec3 worldMax(bbox.max().x(), bbox.max().y(), bbox.max().z());
-		glm::mat4 modelMatrix = glm::mat4(1.0f);  // glm::translate(glm::mat4(1.0f), center) * glm::scale(glm::mat4(1.0f), size);
-
-		renderer_->render(*shader_, volumeTexture_, cameraPos_, view, projection, modelMatrix);
-
-		for (const auto brickbbox : bboxes) {
-			glm::vec3 min = glm::vec3(brickbbox.first[0], brickbbox.first[1], brickbbox.first[2]);
-			glm::vec3 max = glm::vec3(brickbbox.second[0], brickbbox.second[1], brickbbox.second[2]);
-
-			renderer_->drawBoundingBox(*wireframe_, min, max, view, projection, glm::mat4(1.0f));
-		}
-
+		renderer_->drawBoundingBox(*wireframe_, min, max, view, projection, glm::mat4(1.0f));
 	}
+
+	/*
+	shader_->use();
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_3D, volumeTex_.texture());
+
+	shader_->setInt("volumeTexture", 0);
+	*/
+
+
 	// Render ImGui
 	ImGui::Render();
 	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -217,38 +226,8 @@ void Application::render() {
 // -------------------------------------------------------------
 int Application::run() {
 	if (!init()) return -1;
-	{
-		ScopedTimer timer("BrickMap::FromVDB");
-		brickMap.buildFromVDB(coordValue);
-	}
 
-
-	/*
-	{
-		ScopedTimer timer("BrickMap::DeallocatedEmpty");
-		brickMap.deallocateInactive();
-	}
-
-	{
-		ScopedTimer timer("BrickMap::KernelAccess");
-		accessBrick(brickMap);
-	}
-	*/
-
-
-	std::vector<nanovdb::Coord> brickCoords;
-
-	{
-		ScopedTimer timer("BrickMap::GetBrickCoords");
-		brickCoords = brickMap.getActiveBricks();
-		printf("Active bricks: %llu\n", brickCoords.size());
-	}
-
-	for (const auto& brick : brickCoords) {
-		bboxes.push_back(brickMap.getBrickDimensions(brick[0], brick[1], brick[2]));
-	}
-
-	/*if (!brickMap.allocateBrickAt({0,0,0})) {
+	if(!brickMap.allocateBrickAt({0,0,0})) {
 		printf("Failed to allocate brick\n");
 	}
 
@@ -257,10 +236,7 @@ int Application::run() {
 		accessBrick(brickMap);
 	}
 
-	Voxel* voxels = brickMap.getBrickAtHost(0,0,0);
-	for (int i = 0; i < 16; i++) {
-		printf("Voxel %d: %f\n", i, voxels[i].density);
-	}*/
+	cudaDeviceSynchronize();
 
 	// Main loop
 	while (!glfwWindowShouldClose(window_)) {
@@ -289,7 +265,6 @@ void Application::cleanup() {
 	delete shader_;
 	delete wireframe_;
 	delete renderer_;
-	delete vdbLoader_;
 }
 
 // -------------------------------------------------------------

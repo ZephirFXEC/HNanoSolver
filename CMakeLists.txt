@@ -65,7 +65,7 @@ target_compile_features(Utils PUBLIC cxx_std_17)
 
 function(add_sop_library LIBNAME SRC_FILES)
     add_library(${LIBNAME} SHARED ${SRC_FILES})
-    target_link_libraries(${LIBNAME} PRIVATE Utils Kernels HoudiniVDB)
+    target_link_libraries(${LIBNAME} PRIVATE Utils Kernels HoudiniVDB BrickMap)
     target_include_directories(${LIBNAME} PRIVATE
             src
             ${CMAKE_CURRENT_BINARY_DIR}

@@ -1,24 +1,29 @@
 // Application.hpp
 #pragma once
 
-#include <string>
+#include "BrickMap.cuh"
+#include "VolumeTex.cuh"
+
 #include <GLFW/glfw3.h>
+
 #include <glm/glm.hpp>
+#include <string>
+
+
 
 // Forward declarations for your own classes:
 class Shader;
 class Renderer;
-class OpenVDBLoader;
 
 class Application {
-public:
+   public:
 	Application();
 	~Application();
 
 	// Runs the main loop; returns exit code.
 	int run();
 
-private:
+   private:
 	// Initialization and cleanup
 	bool init();
 	void cleanup();
@@ -30,6 +35,7 @@ private:
 
 	// GLFW window and context
 	GLFWwindow* window_;
+	VolumeTexture volumeTex_;
 
 	// Camera state
 	glm::vec3 cameraPos_;
@@ -52,14 +58,12 @@ private:
 	float fov_;
 
 	// Components (these are created dynamically; adjust as needed)
-	OpenVDBLoader* vdbLoader_;
 	Renderer* renderer_;
 	Shader* shader_;
 	Shader* wireframe_;
 
 	// Volume data state
 	bool vdbLoaded_;
-	unsigned int volumeTexture_; // GLuint stored as unsigned int
 
 	// VDB file path (adjust as needed)
 	std::string vdbFilename_;
