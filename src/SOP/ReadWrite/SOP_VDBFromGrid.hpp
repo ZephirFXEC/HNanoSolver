@@ -10,12 +10,35 @@
 
 #include <Utils/GridData.hpp>
 
+#include "BrickMap/BrickMap.cuh"
 #include "SOP_VDBFromGrid.proto.h"
+
+class BrickMapSingleton {
+   public:
+	BrickMapSingleton() : brickMap(nullptr) {
+		if (!brickMap) {
+			brickMap = new BrickMap(Dim(32, 32, 32));
+		}
+	}
+
+	~BrickMapSingleton() {
+		if (brickMap) {
+			delete brickMap;
+		}
+	}
+
+	BrickMap* getBrickMap() const { return brickMap; }
+
+   private:
+	BrickMap* brickMap;
+};
+
 
 class SOP_HNanoVDBFromGrid final : public SOP_Node {
    public:
 	SOP_HNanoVDBFromGrid(OP_Network* net, const char* name, OP_Operator* op) : SOP_Node(net, name, op) {
 		mySopFlags.setManagesDataIDs(true);
+		flags().setTimeDep(true);
 	}
 
 	~SOP_HNanoVDBFromGrid() override = default;
@@ -43,8 +66,12 @@ class SOP_HNanoVDBFromGrid final : public SOP_Node {
 
 class SOP_HNanoVDBFromGridCache final : public SOP_NodeCache {
    public:
-	SOP_HNanoVDBFromGridCache() : SOP_NodeCache() {}
+	SOP_HNanoVDBFromGridCache() : SOP_NodeCache(), brickMapSingleton() {}
+
+
 	~SOP_HNanoVDBFromGridCache() override = default;
+
+	BrickMapSingleton brickMapSingleton;
 };
 
 class SOP_HNanoVDBFromGridVerb final : public SOP_NodeVerb {
