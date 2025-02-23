@@ -36,7 +36,7 @@ houdini_generate_proto_headers( FILES
 
 # Add subdirectories
 add_subdirectory(src/Cuda)
-add_subdirectory(src/Cuda/BrickMap)
+# add_subdirectory(src/Cuda/BrickMap)
 add_subdirectory(src/Tests)
 add_subdirectory(src/HNanoViewer)
 
