@@ -1,6 +1,5 @@
-cmake_minimum_required(VERSION 3.29)
+cmake_minimum_required(VERSION 3.28)
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
 set(BUILD_SHARED_LIBS ON)
 
 project(HNanoSolver LANGUAGES CXX CUDA)
