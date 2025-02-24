@@ -8,11 +8,11 @@
 #include <PRM/PRM_TemplateBuilder.h>
 #include <UT/UT_DSOVersion.h>
 
-#include "Utils/GridBuilder.hpp"
-#include "Utils/ScopedTimer.hpp"
+#include "../Utils/GridBuilder.hpp"
+#include "../Utils/ScopedTimer.hpp"
 
 #define NANOVDB_USE_OPENVDB
-#include <nanovdb/tools/CreateNanoGrid.h>
+#include "nanovdb/tools/CreateNanoGrid.h"
 
 
 const char* const SOP_HNanoVDBProjectNonDivergentVerb::theDsFile = R"THEDSFILE(
@@ -99,7 +99,6 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 		ScopedTimer timer("Merging topology");
 		domain->topologyUnion(*in_velocity);
 		domain->tree().voxelizeActiveTiles();
-
 	}
 
 	HNS::GridIndexedData data;

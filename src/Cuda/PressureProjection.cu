@@ -1,9 +1,9 @@
 #include <openvdb/Types.h>
-#include <nanovdb/tools/cuda/PointsToGrid.cuh>
 
 #include "../Utils/GridData.hpp"
 #include "../Utils/Stencils.hpp"
 #include "Utils.cuh"
+#include "nanovdb/tools/cuda/PointsToGrid.cuh"
 
 __global__ void divergence_idx(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const nanovdb::Coord* __restrict__ d_coord,
                                const nanovdb::Vec3f* __restrict__ velocityData, float* __restrict__ outDivergence, const float dx,
@@ -77,9 +77,8 @@ __global__ void redBlackGaussSeidelUpdate_idx(const nanovdb::NanoGrid<nanovdb::V
 __global__ void subtractPressureGradient_idx(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid,
                                              const nanovdb::Coord* __restrict__ d_coords, const size_t totalVoxels,
                                              const nanovdb::Vec3f* __restrict__ velocity,  // velocity at faces
-                                             const float* __restrict__ pressure,      // pressure at cell centers
-                                             nanovdb::Vec3f* __restrict__ out,
-                                             float voxelSize) {
+                                             const float* __restrict__ pressure,           // pressure at cell centers
+                                             nanovdb::Vec3f* __restrict__ out, float voxelSize) {
 	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 	if (tid >= totalVoxels) return;
 
@@ -121,8 +120,7 @@ __global__ void subtractPressureGradient_idx(const nanovdb::NanoGrid<nanovdb::Va
 	out[tid] = v;
 }
 
-void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
-                             const float voxelSize, const cudaStream_t& stream) {
+void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration, const float voxelSize, const cudaStream_t& stream) {
 	const size_t totalVoxels = data.size();
 	constexpr int blockSize = 256;
 	int numBlocks = (totalVoxels + blockSize - 1) / blockSize;
@@ -153,7 +151,7 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 	cudaDeviceSynchronize();
 
 	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
-	nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
+	    nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
 
 	cudaDeviceSynchronize();
 
@@ -171,7 +169,8 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 		                                                                   totalVoxels, 1, 1.9);
 	}
 
-	subtractPressureGradient_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, totalVoxels, d_velocity, d_pressure, d_velocity, voxelSize);
+	subtractPressureGradient_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, totalVoxels, d_velocity, d_pressure, d_velocity,
+	                                                                  voxelSize);
 
 	cudaDeviceSynchronize();
 
@@ -184,7 +183,6 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 }
 
 
-extern "C" void Divergence_idx(HNS::GridIndexedData& data, const size_t iterations, const float voxelSize,
-                               const cudaStream_t& stream) {
+extern "C" void Divergence_idx(HNS::GridIndexedData& data, const size_t iterations, const float voxelSize, const cudaStream_t& stream) {
 	pressure_projection_idx(data, iterations, voxelSize, stream);
 }

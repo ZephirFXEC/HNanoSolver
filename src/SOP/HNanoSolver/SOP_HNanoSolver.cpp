@@ -3,13 +3,13 @@
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimVDB.h>
 #include <UT/UT_DSOVersion.h>
-#include <nanovdb/tools/CreateNanoGrid.h>
 #include <openvdb/tools/Composite.h>
 #include <openvdb/tools/VolumeAdvect.h>
 
-#include "Utils/GridBuilder.hpp"
-#include "Utils/ScopedTimer.hpp"
-#include "Utils/Utils.hpp"
+#include "../Utils/GridBuilder.hpp"
+#include "../Utils/ScopedTimer.hpp"
+#include "../Utils/Utils.hpp"
+#include "nanovdb/tools/CreateNanoGrid.h"
 
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanosolver", "HNanoSolver", SOP_HNanoSolver::myConstructor, SOP_HNanoSolver::buildTemplates(), 2,
@@ -146,11 +146,11 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(Domain, &data);
 
 	for (const auto& grid : feedback_float_grids) {
-	    builder.addGrid(grid, grid->getName());
+		builder.addGrid(grid, grid->getName());
 	}
 
 	for (const auto& grid : feedback_vector_grids) {
-	    builder.addGrid(grid, grid->getName());
+		builder.addGrid(grid, grid->getName());
 	}
 
 	builder.build();

@@ -3,15 +3,16 @@
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimVDB.h>
 #include <GU/GU_PrimVolume.h>
+#include <PRM/PRM_TemplateBuilder.h>
 #include <UT/UT_DSOVersion.h>
 #include <tbb/enumerable_thread_specific.h>
 
-#include "Utils/GridBuilder.hpp"
-#include "Utils/ScopedTimer.hpp"
-#include "Utils/Utils.hpp"
+#include "../Utils/GridBuilder.hpp"
+#include "../Utils/ScopedTimer.hpp"
+#include "../Utils/Utils.hpp"
 
 #define NANOVDB_USE_OPENVDB
-#include <nanovdb/tools/CreateNanoGrid.h>
+#include "nanovdb/tools/CreateNanoGrid.h"
 
 
 void newSopOperator(OP_OperatorTable* table) {
