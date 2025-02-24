@@ -8,18 +8,33 @@
 - **HNanoViewer**, Standalone app to visualize VDBs and kernels without having to relaunch Houdini.
 
 
-
 # Warning ! 
 > Very Early Development 
-
 This repo is undergoing rewrite very often and might not compile from time to time.
 Feel free to check the [Open Issues](https://github.com/ZephirFXEC/HNanoSolver/issues) for more details.
 
-## My system : 
-- Windows 10
-- GTX 1080ti
-- Cuda 12.6
-- Houdini 20.5.370
+# How to Build : 
+## Windows : 
+> Make sure HFS is set in your PATH.
+- `git clone https://github.com/ZephirFXEC/HNanoSolver`
+- `cd HNanoSolver && mkdir build && cd build`
+- `cmake -G "Visual Studio 17 2022" -T v142`
+It will generate Visual Studio solutions files that you can use to Compile & Run.
+
+## Linux : 
+> Tested on Ubuntu 24 using GCC 13.3 and CUDA 12.8
+- `git clone https://github.com/ZephirFXEC/HNanoSolver`
+- `cd HNanoSolver` 
+- `git checkout build-streamlined` to get the Linux Build system.
+- `mkdir build && cd build`
+- `cmake .. `
+> if any errors here, make sure to have $HFS set, and if NVCC (Cuda compiler) cannot be found try to run :
+>  `cmake -DCMAKE_CUDA_COMPILER:FILEPATH=/usr/local/cuda-12.8/bin/nvcc ..`
+- `make`
+> if any errors related to AVX / Cuda compilation it's probably due to an incompatibility between GCC and NVCC
+
+> if any errors in the last linking step, regenerate using the `-fPIC` flag.
+
 
 
 # Reference
