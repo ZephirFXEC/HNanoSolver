@@ -6,12 +6,11 @@
 
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/cuda/DeviceBuffer.h>
 
+#include "../Utils/GridData.hpp"
+#include "../Utils/Utils.hpp"
 #include "SOP_VDBProjectNonDivergent.proto.h"
-#include "Utils/GridData.hpp"
-#include "Utils/Utils.hpp"
+#include "nanovdb/cuda/DeviceBuffer.h"
 
 class SOP_HNanoVDBProjectNonDivergent final : public SOP_Node {
    public:
@@ -67,5 +66,4 @@ class SOP_HNanoVDBProjectNonDivergentVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
-extern "C" void Divergence_idx(HNS::GridIndexedData& data,
- size_t iteration, float voxelSize, const cudaStream_t& stream);
+extern "C" void Divergence_idx(HNS::GridIndexedData& data, size_t iteration, float voxelSize, const cudaStream_t& stream);

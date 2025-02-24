@@ -5,19 +5,18 @@
 #define NANOVDB_USE_OPENVDB
 
 #include <gtest/gtest.h>
-#include <nanovdb/tools/CreateNanoGrid.h>
 #include <openvdb/openvdb.h>
 #include <openvdb/tools/LevelSetUtil.h>
 
-#include "Utils/GridBuilder.hpp"
-#include "Utils/GridData.hpp"
-#include "Utils/Stencils.hpp"
+#include "../src/Utils/GridBuilder.hpp"
+#include "../src/Utils/GridData.hpp"
+#include "../src/Utils/Stencils.hpp"
+#include "nanovdb/tools/CreateNanoGrid.h"
 
 
 struct Vec3f {
 	float x, y, z;
 };
-
 
 
 template <class GridType>
@@ -64,7 +63,6 @@ void EncodingDecodingTest(AllocationType type) {
 	openvdb::FloatGrid::Ptr domain = openvdb::FloatGrid::create();
 	domain->topologyUnion(*denPtr);
 	domain->topologyUnion(*velPtr);
-
 
 
 	HNS::GridIndexedData indexed_data;
@@ -614,7 +612,7 @@ TEST(GridIndexedDataTest, MiniSampler) {
 	EXPECT_FLOAT_EQ(samplerf(nanovdb::Coord(0, 1, 0)), 0.0f);
 
 	for (int i = 0; i < indexed_data.size(); ++i) {
-		if (indexed_data.pValues<float>("density")[i] == 1){
+		if (indexed_data.pValues<float>("density")[i] == 1) {
 			printf("Iter : %d\n", i);
 			printf("Coord : %d %d %d\n", indexed_data.pCoords()[i].x(), indexed_data.pCoords()[i].y(), indexed_data.pCoords()[i].z());
 			printf("Index at Iter: %llu\n", indexed_data.pIndexes()[i]);

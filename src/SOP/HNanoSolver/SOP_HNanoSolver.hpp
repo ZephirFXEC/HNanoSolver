@@ -11,10 +11,10 @@
 #include <PRM/PRM_TemplateBuilder.h>
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
-#include <nanovdb/NanoVDB.h>
 
-#include "Utils/GridData.hpp"
+#include "../Utils/GridData.hpp"
 #include "SOP_HNanoSolver.proto.h"
+#include "nanovdb/NanoVDB.h"
 
 class SOP_HNanoSolver final : public SOP_Node {
    public:
@@ -29,9 +29,7 @@ class SOP_HNanoSolver final : public SOP_Node {
 
 	static PRM_Template* buildTemplates();
 
-	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) {
-		return new SOP_HNanoSolver(net, name, op);
-	}
+	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) { return new SOP_HNanoSolver(net, name, op); }
 
 	OP_ERROR cookMySop(OP_Context& context) override { return cookMyselfAsVerb(context); }
 
@@ -52,7 +50,6 @@ class SOP_HNanoSolverCache final : public SOP_NodeCache {
    public:
 	SOP_HNanoSolverCache() : SOP_NodeCache() {}
 	~SOP_HNanoSolverCache() override = default;
-
 };
 
 class SOP_HNanoSolverVerb final : public SOP_NodeVerb {

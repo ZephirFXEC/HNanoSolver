@@ -1,29 +1,13 @@
 #pragma once
 
-#include <nanovdb/NanoVDB.h>
-#include <nanovdb/math/SampleFromVoxels.h>
-
 #include "../Utils/Stencils.hpp"
+#include "nanovdb/NanoVDB.h"
+#include "nanovdb/math/SampleFromVoxels.h"
 
 template <typename T>
 __device__ T lerp(T v0, T v1, T t) {
 	return fma(t, v1, fma(-t, v0, v0));
 }
-
-template <typename Func, typename... Args>
-__global__ void lambdaKernel(const size_t numItems, Func func, Args... args) {
-	const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-	if (tid >= numItems) return;
-	func(tid, args...);
-}
-
-template <typename Func, typename... Args>
-__global__ void lambdaKernelLeaf(const size_t leafCount, Func func, Args... args) {
-	const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-	if (tid >= leafCount * 512) return;
-	func(tid, args...);
-}
-
 
 inline size_t blocksPerGrid(const size_t numItems, const size_t threadsPerBlock) {
 	NANOVDB_ASSERT(numItems > 0 && threadsPerBlock >= 32 && threadsPerBlock % 32 == 0);
@@ -74,8 +58,7 @@ inline __device__ nanovdb::Vec3f sampleMACVelocity(
 	return {u, v, w};
 }
 
-inline __device__ nanovdb::Vec3f sampleMACVelocity_idx(const IndexSampler<nanovdb::Vec3f, 1>& velSampler,
-    const nanovdb::Vec3f& pos) {
+inline __device__ nanovdb::Vec3f sampleMACVelocity_idx(const IndexSampler<nanovdb::Vec3f, 1>& velSampler, const nanovdb::Vec3f& pos) {
 	const float u = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
 	const float v = velSampler(pos + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
 	const float w = velSampler(pos + nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
@@ -83,9 +66,7 @@ inline __device__ nanovdb::Vec3f sampleMACVelocity_idx(const IndexSampler<nanovd
 }
 
 
-inline __device__ nanovdb::Vec3f MACToFaceCentered_idx(
-    const IndexSampler<nanovdb::Vec3f, 1>& velSampler,
-    const nanovdb::Vec3f& pos) {
+inline __device__ nanovdb::Vec3f MACToFaceCentered_idx(const IndexSampler<nanovdb::Vec3f, 1>& velSampler, const nanovdb::Vec3f& pos) {
 	const float up = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
 	const float vp = velSampler(pos + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
 	const float wp = velSampler(pos + nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];

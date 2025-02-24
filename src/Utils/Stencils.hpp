@@ -12,7 +12,8 @@
 #define __hostdev__
 #endif
 
-#include <nanovdb/math/Math.h>
+#include "nanovdb/NanoVDB.h"
+#include "nanovdb/math/Math.h"
 
 
 template <template <typename> class Vec3T>

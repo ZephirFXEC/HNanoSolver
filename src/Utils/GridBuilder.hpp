@@ -12,7 +12,7 @@
 #include <utility>
 
 #include "GridData.hpp"
-#include "Utils/ScopedTimer.hpp"
+#include "ScopedTimer.hpp"
 
 namespace HNS {
 

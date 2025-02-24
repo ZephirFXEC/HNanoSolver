@@ -9,15 +9,15 @@
 
 #include <UT/UT_DSOVersion.h>
 #include <cuda_runtime_api.h>
-#include <nanovdb/cuda/DeviceBuffer.h>
-#include <nanovdb/tools/CreateNanoGrid.h>
 
-#include "Utils/GridBuilder.hpp"
-#include "Utils/ScopedTimer.hpp"
-#include "Utils/Utils.hpp"
+#include "../Utils/GridBuilder.hpp"
+#include "../Utils/ScopedTimer.hpp"
+#include "../Utils/Utils.hpp"
+#include "nanovdb/cuda/DeviceBuffer.h"
+#include "nanovdb/tools/CreateNanoGrid.h"
 
 
-extern "C" void launch_kernels(HNS::GridIndexedData& data, float dt, float voxelSize, cudaStream_t stream );
+extern "C" void launch_kernels(HNS::GridIndexedData& data, float dt, float voxelSize, cudaStream_t stream);
 extern "C" void gpu_index_grid(HNS::GridIndexedData& data, float voxelSize, const cudaStream_t& stream);
 
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(

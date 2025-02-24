@@ -6,11 +6,11 @@
 #include <PRM/PRM_TemplateBuilder.h>
 #include <UT/UT_DSOVersion.h>
 
-#include "Utils/GridBuilder.hpp"
-#include "Utils/ScopedTimer.hpp"
+#include "../Utils/GridBuilder.hpp"
+#include "../Utils/ScopedTimer.hpp"
 
 #define NANOVDB_USE_OPENVDB
-#include <nanovdb/tools/CreateNanoGrid.h>
+#include "nanovdb/tools/CreateNanoGrid.h"
 
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanoadvect", "HNanoAdvect", SOP_HNanoVDBAdvect::myConstructor,
