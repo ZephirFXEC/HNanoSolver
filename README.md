@@ -13,6 +13,7 @@
 This repo is undergoing rewrite very often and might not compile from time to time.
 Feel free to check the [Open Issues](https://github.com/ZephirFXEC/HNanoSolver/issues) for more details.
 
+
 # How to Build : 
 ## Windows : 
 > Make sure HFS is set in your PATH.
@@ -27,13 +28,10 @@ It will generate Visual Studio solutions files that you can use to Compile & Run
 - `cd HNanoSolver` 
 - `git checkout build-streamlined` to get the Linux Build system.
 - `mkdir build && cd build`
-- `cmake .. `
-> if any errors here, make sure to have $HFS set, and if NVCC (Cuda compiler) cannot be found try to run :
->  `cmake -DCMAKE_CUDA_COMPILER:FILEPATH=/usr/local/cuda-12.8/bin/nvcc ..`
+- `cmake -DCMAKE_CUDA_COMPILER:FILEPATH=/usr/local/cuda-12.8/bin/nvcc -DCMAKE_CUDA_FLAGS:STRING="-O2 -g -DNDEBUG -fPIC" ..`
+> if any errors here, make sure to have $HFS set, and the right NVCC compiler
 - `make`
 > if any errors related to AVX / Cuda compilation it's probably due to an incompatibility between GCC and NVCC
-
-> if any errors in the last linking step, regenerate using the `-fPIC` flag.
 
 
 
