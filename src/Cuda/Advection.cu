@@ -1,22 +1,16 @@
-#include <nanovdb/NanoVDB.h>
+#include <openvdb/Types.h>
 
 #include <cuda/std/cmath>
+
 #include "../Utils/GridData.hpp"
 #include "../Utils/Stencils.hpp"
-#include <openvdb/Types.h>
-#include <nanovdb/tools/cuda/PointsToGrid.cuh>
 #include "Utils.cuh"
+#include "nanovdb/NanoVDB.h"
+#include "nanovdb/tools/cuda/PointsToGrid.cuh"
 
-__global__ void advect_idx(
-	const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid,
-	const nanovdb::Coord* __restrict__ coords,
-	const nanovdb::Vec3f* __restrict__ velocityData,
-	const float* __restrict__ inData,
-	float* __restrict__ outData,
-	const size_t totalVoxels,
-	const float dt,
-	const float voxelSize)
-{
+__global__ void advect_idx(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const nanovdb::Coord* __restrict__ coords,
+                           const nanovdb::Vec3f* __restrict__ velocityData, const float* __restrict__ inData, float* __restrict__ outData,
+                           const size_t totalVoxels, const float dt, const float voxelSize) {
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= totalVoxels) return;
 
@@ -61,15 +55,9 @@ __global__ void advect_idx(
 }
 
 
-__global__ void advect_idx(
-	const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid,
-	const nanovdb::Coord* __restrict__ coords,
-	const nanovdb::Vec3f* __restrict__ velocityData,
-	nanovdb::Vec3f* __restrict__ outVelocity,
-	const size_t totalVoxels,
-	const float dt,
-	const float voxelSize)
-{
+__global__ void advect_idx(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const nanovdb::Coord* __restrict__ coords,
+                           const nanovdb::Vec3f* __restrict__ velocityData, nanovdb::Vec3f* __restrict__ outVelocity,
+                           const size_t totalVoxels, const float dt, const float voxelSize) {
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= totalVoxels) return;
 
@@ -104,8 +92,7 @@ __global__ void advect_idx(
 }
 
 
-void advect_index_grid(HNS::GridIndexedData& data, const float dt,
-                       const float voxelSize, const cudaStream_t& stream) {
+void advect_index_grid(HNS::GridIndexedData& data, const float dt, const float voxelSize, const cudaStream_t& stream) {
 	const size_t totalVoxels = data.size();
 
 	const nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>("vel"));
@@ -147,7 +134,7 @@ void advect_index_grid(HNS::GridIndexedData& data, const float dt,
 	cudaMalloc(&d_outFuel, totalVoxels * sizeof(float));
 
 	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
-	nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
+	    nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
 
 
 	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
@@ -156,7 +143,8 @@ void advect_index_grid(HNS::GridIndexedData& data, const float dt,
 	int numBlocks = (totalVoxels + blockSize - 1) / blockSize;
 
 	advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_density, d_outDensity, totalVoxels, dt, voxelSize);
-	advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_temperature, d_outTemperature, totalVoxels, dt, voxelSize);
+	advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_temperature, d_outTemperature, totalVoxels, dt,
+	                                                voxelSize);
 	advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_fuel, d_outFuel, totalVoxels, dt, voxelSize);
 
 	cudaStreamSynchronize(stream);
@@ -177,8 +165,7 @@ void advect_index_grid(HNS::GridIndexedData& data, const float dt,
 }
 
 
-void advect_index_grid_v(HNS::GridIndexedData& data, const float dt,
-                       const float voxelSize, const cudaStream_t& stream) {
+void advect_index_grid_v(HNS::GridIndexedData& data, const float dt, const float voxelSize, const cudaStream_t& stream) {
 	const size_t totalVoxels = data.size();
 
 	nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>("vel"));
@@ -199,7 +186,7 @@ void advect_index_grid_v(HNS::GridIndexedData& data, const float dt,
 	cudaDeviceSynchronize();
 
 	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
-	nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
+	    nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
 	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
 	cudaDeviceSynchronize();
 
@@ -220,12 +207,10 @@ void advect_index_grid_v(HNS::GridIndexedData& data, const float dt,
 }
 
 
-extern "C" void AdvectIndexGrid(HNS::GridIndexedData& data,
-                                const float dt, const float voxelSize, const cudaStream_t& stream) {
+extern "C" void AdvectIndexGrid(HNS::GridIndexedData& data, const float dt, const float voxelSize, const cudaStream_t& stream) {
 	advect_index_grid(data, dt, voxelSize, stream);
 }
 
-extern "C" void AdvectIndexGridVelocity(HNS::GridIndexedData& data, const float dt,
-				const float voxelSize, const cudaStream_t& stream) {
+extern "C" void AdvectIndexGridVelocity(HNS::GridIndexedData& data, const float dt, const float voxelSize, const cudaStream_t& stream) {
 	advect_index_grid_v(data, dt, voxelSize, stream);
 }

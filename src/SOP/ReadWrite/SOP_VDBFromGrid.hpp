@@ -6,11 +6,11 @@
 #include <PRM/PRM_TemplateBuilder.h>
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
-#include <nanovdb/NanoVDB.h>
 
-#include <Utils/GridData.hpp>
+#include <../Utils/GridData.hpp>
 
 #include "SOP_VDBFromGrid.proto.h"
+#include "nanovdb/NanoVDB.h"
 
 class SOP_HNanoVDBFromGrid final : public SOP_Node {
    public:

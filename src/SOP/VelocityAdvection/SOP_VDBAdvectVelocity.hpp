@@ -1,14 +1,12 @@
 #pragma once
 
-#include <PRM/PRM_TemplateBuilder.h>
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
 
-#include <nanovdb/cuda/DeviceBuffer.h>
-
+#include "../Utils/GridData.hpp"
+#include "../Utils/Utils.hpp"
 #include "SOP_VDBAdvectVelocity.proto.h"
-#include "Utils/GridData.hpp"
-#include "Utils/Utils.hpp"
+#include "nanovdb/cuda/DeviceBuffer.h"
 
 class SOP_HNanoAdvectVelocity final : public SOP_Node {
    public:
@@ -59,5 +57,4 @@ class SOP_HNanoAdvectVelocityVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
-extern "C" void AdvectIndexGridVelocity(HNS::GridIndexedData& data, float dt,
-				float voxelSize, const cudaStream_t &stream);
+extern "C" void AdvectIndexGridVelocity(HNS::GridIndexedData& data, float dt, float voxelSize, const cudaStream_t& stream);

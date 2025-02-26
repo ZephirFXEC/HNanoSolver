@@ -1,16 +1,14 @@
-// Copyright Contributors to the OpenVDB Project
-// SPDX-License-Identifier: Apache-2.0
-
-#include <nanovdb/NanoVDB.h>  // this defined the core tree data structure of NanoVDB accessable on both the host and device
 #include <openvdb/Types.h>
 
 #include <cstdio>  // for printf
-#include <nanovdb/tools/cuda/PointsToGrid.cuh>
 
-#include "../Utils/Stencils.hpp"
 #include "../Utils/GridData.hpp"
+#include "../Utils/Stencils.hpp"
+#include "nanovdb/NanoVDB.h"
+#include "nanovdb/tools/cuda/PointsToGrid.cuh"
 
-__global__ void sampler_gpu(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, const nanovdb::Coord* coords, const nanovdb::Vec3f* velocity, const float* density) {
+__global__ void sampler_gpu(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuGrid, const nanovdb::Coord* coords,
+                            const nanovdb::Vec3f* velocity, const float* density) {
 	const IndexOffsetSampler<0> idxSampler(*gpuGrid);
 
 	const IndexSampler<float, 1> sampler_f(idxSampler, density);
@@ -43,14 +41,13 @@ __global__ void sampler_gpu(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* gpuG
 }
 
 __global__ void advect_idx(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid,
-						   const nanovdb::Coord* coords,              // Device array of size totalVoxels
-						   const nanovdb::Vec3f* velocityData,  // Device array of size totalVoxels
-						   const float* densityData,            // Device array of size totalVoxels
-						   float* outDensity,                   // Output array of size totalVoxels
-						   const size_t totalVoxels, const float dt, const float voxelSize) {
-
+                           const nanovdb::Coord* coords,        // Device array of size totalVoxels
+                           const nanovdb::Vec3f* velocityData,  // Device array of size totalVoxels
+                           const float* densityData,            // Device array of size totalVoxels
+                           float* outDensity,                   // Output array of size totalVoxels
+                           const size_t totalVoxels, const float dt, const float voxelSize) {
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-	if (idx >= totalVoxels) return; // Early out-of-bounds check
+	if (idx >= totalVoxels) return;  // Early out-of-bounds check
 
 	// Construct sampler objects AFTER ensuring the thread is within bounds.
 	const IndexOffsetSampler<0> idxSampler(*domainGrid);
@@ -60,20 +57,19 @@ __global__ void advect_idx(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domai
 	// Get the active coordinate for this voxel.
 	const nanovdb::Coord coord = coords[idx];
 
-	if (idx == 16)
-		printf("Coord and idx : [%llu]: {%d %d %d}\n", idx, coord[0], coord[1], coord[2]);
+	if (idx == 16) printf("Coord and idx : [%llu]: {%d %d %d}\n", idx, coord[0], coord[1], coord[2]);
 
 	// Fetch the velocity at the given coordinate.
 	const nanovdb::Vec3f velocity = velocitySampler(coord);
 
 	if (idx == 16)
-		printf("Velocity idx : [%llu] at %d %d %d = {%f %f %f}\n", idx, coord[0], coord[1], coord[2], velocity[0], velocity[1], velocity[2]);
+		printf("Velocity idx : [%llu] at %d %d %d = {%f %f %f}\n", idx, coord[0], coord[1], coord[2], velocity[0], velocity[1],
+		       velocity[2]);
 
 	// Compute the displaced position.
 	const nanovdb::Vec3f displacedPos = coord.asVec3s() - velocity * dt / voxelSize;
 
-	if (idx == 16)
-		printf("Displaced Position idx : [%llu] at {%f %f %f}\n", idx, displacedPos[0], displacedPos[1], displacedPos[2]);
+	if (idx == 16) printf("Displaced Position idx : [%llu] at {%f %f %f}\n", idx, displacedPos[0], displacedPos[1], displacedPos[2]);
 
 	// Sample the density at the displaced position.
 	outDensity[idx] = densitySampler(displacedPos);
@@ -83,7 +79,6 @@ __global__ void advect_idx(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domai
 }
 
 extern "C" void gpu_index_grid(HNS::GridIndexedData& data, const float voxelSize, const cudaStream_t& stream) {
-
 	const auto* h_coords = data.pCoords();
 	nanovdb::Coord* d_coords = nullptr;
 	cudaMalloc(&d_coords, data.size() * sizeof(nanovdb::Coord));
@@ -99,31 +94,26 @@ extern "C" void launch_kernels(HNS::GridIndexedData& data,
                                const float dt,         // time step for advection
                                const float voxelSize,  // voxel size in world units
                                cudaStream_t stream) {
-
 	const size_t totalVoxels = data.size();
 
-    const nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>("velocity"));
+	const nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>("velocity"));
 	const auto* density = data.pValues<float>("density");
 	const auto* coords = data.pCoords();
 
 	// Allocate device memory for velocity.
-    nanovdb::Vec3f* d_velocity = nullptr;
-    cudaMalloc(&d_velocity, totalVoxels * sizeof(nanovdb::Vec3f));
-    cudaMemcpyAsync(d_velocity, velocity, totalVoxels * sizeof(nanovdb::Vec3f),
-                    cudaMemcpyHostToDevice, stream);
+	nanovdb::Vec3f* d_velocity = nullptr;
+	cudaMalloc(&d_velocity, totalVoxels * sizeof(nanovdb::Vec3f));
+	cudaMemcpyAsync(d_velocity, velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyHostToDevice, stream);
 
-    // Allocate device memory for density.
-    float* d_density = nullptr;
-    cudaMalloc(&d_density, totalVoxels * sizeof(float));
-    cudaMemcpyAsync(d_density, density, totalVoxels * sizeof(float),
-                    cudaMemcpyHostToDevice, stream);
+	// Allocate device memory for density.
+	float* d_density = nullptr;
+	cudaMalloc(&d_density, totalVoxels * sizeof(float));
+	cudaMemcpyAsync(d_density, density, totalVoxels * sizeof(float), cudaMemcpyHostToDevice, stream);
 
-    // Allocate device memory for voxel coordinates.
-    nanovdb::Coord* d_coords = nullptr;
-    cudaMalloc(&d_coords, totalVoxels * sizeof(nanovdb::Coord));
-    cudaMemcpyAsync(d_coords, coords, totalVoxels * sizeof(nanovdb::Coord),
-                    cudaMemcpyHostToDevice, stream);
-
+	// Allocate device memory for voxel coordinates.
+	nanovdb::Coord* d_coords = nullptr;
+	cudaMalloc(&d_coords, totalVoxels * sizeof(nanovdb::Coord));
+	cudaMemcpyAsync(d_coords, coords, totalVoxels * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream);
 
 
 	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
@@ -133,11 +123,11 @@ extern "C" void launch_kernels(HNS::GridIndexedData& data,
 	// Launch the advection kernel.
 	sampler_gpu<<<1, 1, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_density);
 
-    // Wait for all asynchronous operations on this stream to finish.
-    cudaStreamSynchronize(stream);
+	// Wait for all asynchronous operations on this stream to finish.
+	cudaStreamSynchronize(stream);
 
-    // Free the allocated device memory.
-    cudaFree(d_velocity);
-    cudaFree(d_density);
-    cudaFree(d_coords);
+	// Free the allocated device memory.
+	cudaFree(d_velocity);
+	cudaFree(d_density);
+	cudaFree(d_coords);
 }

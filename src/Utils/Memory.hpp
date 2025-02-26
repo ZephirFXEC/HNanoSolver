@@ -1,9 +1,21 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <typeinfo>
+
 #include <iostream>
-#include <memory>
+#include <typeinfo>
+
+#ifdef __linux__
+#include <malloc.h>
+#define _aligned_malloc(size, alignment) memalign(alignment, size)
+#define _aligned_free free
+#elif _WIN32
+#include <malloc.h>
+#define _aligned_malloc(size, alignment) _aligned_malloc(size, alignment)
+#define _aligned_free _aligned_free
+#else
+
+#endif
 
 enum class AllocationType { Standard, Aligned, CudaPinned };
 
@@ -11,9 +23,7 @@ template <typename T>
 struct MemoryBlock {
 	MemoryBlock() = default;
 
-	~MemoryBlock() {
-		clear();
-	}
+	~MemoryBlock() { clear(); }
 
 	bool allocateCudaPinned(const size_t numElements) {
 		clear();
@@ -66,13 +76,13 @@ struct MemoryBlock {
 			switch (allocType) {
 				case AllocationType::Standard:
 					delete[] ptr;
-				break;
+					break;
 				case AllocationType::Aligned:
 					_aligned_free(ptr);
-				break;
+					break;
 				case AllocationType::CudaPinned:
 					cudaFreeHost(ptr);
-				break;
+					break;
 				default:
 					break;
 			}
