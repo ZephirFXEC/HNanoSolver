@@ -15,14 +15,22 @@ FetchContent_MakeAvailable(googletest)
 
 enable_testing()
 
+include_directories(../externals)
 
 add_executable(IndexGrid IndexGrid.cpp)
-target_link_directories(IndexGrid PRIVATE "C:/Program Files/Microsoft Visual Studio/2022/Preview/VC/Tools/MSVC/14.42.34321/lib/x64")
 
-#target_compile_options(IndexGrid PRIVATE $<$<CONFIG:Debug,RelWithDebInfo>:/fsanitize=address>)
 target_link_libraries(IndexGrid PRIVATE GTest::gtest_main Utils HoudiniVDB Kernels)
 
+# Copy every dll in $ENV{HFS}/bin to the output directory
+file(GLOB HFS_DLLS "$ENV{HFS}/bin/*.dll")
+file(COPY ${HFS_DLLS} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/Release)
 
+# Copy GTest DLLs to the output directory
+add_custom_command(TARGET IndexGrid POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:GTest::gtest>
+        $<TARGET_FILE:GTest::gtest_main>
+        $<TARGET_FILE_DIR:IndexGrid>)
 
 include(GoogleTest)
 gtest_discover_tests(IndexGrid)
