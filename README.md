@@ -26,7 +26,6 @@ It will generate Visual Studio solutions files that you can use to Compile & Run
 > Tested on Ubuntu 24 using GCC 13.3 and CUDA 12.8
 - `git clone https://github.com/ZephirFXEC/HNanoSolver`
 - `cd HNanoSolver` 
-- `git checkout build-streamlined` to get the Linux Build system.
 - `mkdir build && cd build`
 - `cmake -DCMAKE_CUDA_COMPILER:FILEPATH=/usr/local/cuda-12.8/bin/nvcc -DCMAKE_CUDA_FLAGS:STRING="-O2 -g -DNDEBUG -fPIC" ..`
 > if any errors here, make sure to have $HFS set, and the right NVCC compiler
