@@ -92,83 +92,113 @@ __global__ void advect_idx(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domai
 }
 
 
-void advect_index_grid(HNS::GridIndexedData& data, const float dt, const float voxelSize, const cudaStream_t& stream) {
+void advect_index_grid(HNS::GridIndexedData& data, const float dt, const float voxelSize, const cudaStream_t& mainStream) {
 	const size_t totalVoxels = data.size();
 
-	const nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>("vel"));
-	auto* density = data.pValues<float>("density");
-	auto* temperature = data.pValues<float>("temperature");
-	auto* fuel = data.pValues<float>("fuel");
-
-	if (!velocity || !density || !temperature || !fuel) {
-		throw std::runtime_error("Density data not found in the grid.");
+	// Get velocity block (assuming exactly one Vec3f block)
+	const auto vec3fBlocks = data.getBlocksOfType<openvdb::Vec3f>();
+	if (vec3fBlocks.size() != 1) {
+		throw std::runtime_error("Expected exactly one Vec3f block (velocity)");
 	}
 
-	// Allocate device memory.
+	const nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>(vec3fBlocks[0]));
+
+	// Get all float blocks (density, temperature, fuel, etc.)
+	const auto floatBlocks = data.getBlocksOfType<float>();
+	if (floatBlocks.empty()) {
+		throw std::runtime_error("No float blocks found");
+	}
+
+	// Validate pointers
+	if (!velocity) {
+		throw std::runtime_error("Velocity data not found");
+	}
+
+
+	// Create streams and storage for float blocks
+	std::vector<cudaStream_t> streams(floatBlocks.size());
+	std::vector<float*> hostPointers;
+	std::vector<float*> d_inputs, d_outputs;
+
+	// Initialize resources for each float block
+	for (auto& name : floatBlocks) {
+		cudaStreamCreate(&streams[hostPointers.size()]);
+
+		auto* host_ptr = data.pValues<float>(name);
+		if (!host_ptr) {
+			throw std::runtime_error("Block '" + name + "' not found or type mismatch");
+		}
+		hostPointers.push_back(host_ptr);
+
+		float *d_in, *d_out;
+		cudaMalloc(&d_in, totalVoxels * sizeof(float));
+		cudaMalloc(&d_out, totalVoxels * sizeof(float));
+		d_inputs.push_back(d_in);
+		d_outputs.push_back(d_out);
+	}
+
+
+	// Allocate shared device memory
 	nanovdb::Vec3f* d_velocity = nullptr;
 	nanovdb::Coord* d_coords = nullptr;
-
-	float* d_density = nullptr;
-	float* d_temperature = nullptr;
-	float* d_fuel = nullptr;
-
 	cudaMalloc(&d_velocity, totalVoxels * sizeof(nanovdb::Vec3f));
 	cudaMalloc(&d_coords, totalVoxels * sizeof(nanovdb::Coord));
-	cudaMalloc(&d_density, totalVoxels * sizeof(float));
-	cudaMalloc(&d_temperature, totalVoxels * sizeof(float));
-	cudaMalloc(&d_fuel, totalVoxels * sizeof(float));
 
-	cudaMemcpy(d_coords, data.pCoords(), totalVoxels * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_density, density, totalVoxels * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_temperature, temperature, totalVoxels * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_fuel, fuel, totalVoxels * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_velocity, velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyHostToDevice);
+	// Copy shared data
+	cudaMemcpyAsync(d_coords, data.pCoords(), totalVoxels * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, mainStream);
+	cudaMemcpyAsync(d_velocity, velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyHostToDevice, mainStream);
 
-	// Allocate device memory for the output density.
-	float* d_outDensity = nullptr;
-	float* d_outTemperature = nullptr;
-	float* d_outFuel = nullptr;
+	// Process each float block
+	constexpr int blockSize = 256;
+	const int numBlocks = (totalVoxels + blockSize - 1) / blockSize;
+	auto gridHandle = nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
 
-	cudaMalloc(&d_outDensity, totalVoxels * sizeof(float));
-	cudaMalloc(&d_outTemperature, totalVoxels * sizeof(float));
-	cudaMalloc(&d_outFuel, totalVoxels * sizeof(float));
-
-	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
-	    nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
+	const auto gpuGrid = gridHandle.deviceGrid<nanovdb::ValueOnIndex>();
 
 
-	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
+#pragma unroll
+	for (size_t i = 0; i < floatBlocks.size(); ++i) {
+		// Copy input data to device
+		cudaMemcpyAsync(d_inputs[i], hostPointers[i], totalVoxels * sizeof(float), cudaMemcpyHostToDevice, streams[i]);
+	}
+#pragma unroll
+	for (size_t i = 0; i < floatBlocks.size(); ++i) {
+		// Launch kernel
+		advect_idx<<<numBlocks, blockSize, 0, streams[i]>>>(gpuGrid, d_coords, d_velocity, d_inputs[i], d_outputs[i], totalVoxels, dt,
+		                                                    voxelSize);
+	}
+#pragma unroll
+	for (size_t i = 0; i < floatBlocks.size(); ++i) {
+		// Copy results back
+		cudaMemcpyAsync(hostPointers[i], d_outputs[i], totalVoxels * sizeof(float), cudaMemcpyDeviceToHost, streams[i]);
+	}
 
-	constexpr int blockSize = 512;
-	int numBlocks = (totalVoxels + blockSize - 1) / blockSize;
+	// Synchronize and cleanup
+	cudaStreamSynchronize(mainStream);
+	for (auto& stream : streams) {
+		cudaStreamSynchronize(stream);
+		cudaStreamDestroy(stream);
+	}
 
-	advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_density, d_outDensity, totalVoxels, dt, voxelSize);
-	advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_temperature, d_outTemperature, totalVoxels, dt,
-	                                                voxelSize);
-	advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_fuel, d_outFuel, totalVoxels, dt, voxelSize);
-
-	cudaStreamSynchronize(stream);
-
-	cudaMemcpy(density, d_outDensity, totalVoxels * sizeof(float), cudaMemcpyDeviceToHost);
-	cudaMemcpy(temperature, d_outTemperature, totalVoxels * sizeof(float), cudaMemcpyDeviceToHost);
-	cudaMemcpy(fuel, d_outFuel, totalVoxels * sizeof(float), cudaMemcpyDeviceToHost);
-
-	// Free the allocated device memory.
+	// Free device memory
 	cudaFree(d_velocity);
-	cudaFree(d_density);
 	cudaFree(d_coords);
-	cudaFree(d_outDensity);
-	cudaFree(d_temperature);
-	cudaFree(d_outTemperature);
-	cudaFree(d_fuel);
-	cudaFree(d_outFuel);
+	for (size_t i = 0; i < floatBlocks.size(); ++i) {
+		cudaFree(d_inputs[i]);
+		cudaFree(d_outputs[i]);
+	}
 }
 
 
 void advect_index_grid_v(HNS::GridIndexedData& data, const float dt, const float voxelSize, const cudaStream_t& stream) {
 	const size_t totalVoxels = data.size();
 
-	nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>("vel"));
+	const auto vec3fBlocks = data.getBlocksOfType<openvdb::Vec3f>();
+	if (vec3fBlocks.size() != 1) {
+		throw std::runtime_error("Expected exactly one Vec3f block (velocity)");
+	}
+
+	nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>(vec3fBlocks[0]));
 
 	nanovdb::Vec3f* d_velocity = nullptr;
 	cudaMalloc(&d_velocity, totalVoxels * sizeof(nanovdb::Vec3f));
@@ -183,19 +213,17 @@ void advect_index_grid_v(HNS::GridIndexedData& data, const float dt, const float
 	// Allocate device memory for the output density.
 	nanovdb::Vec3f* d_outVel = nullptr;
 	cudaMalloc(&d_outVel, totalVoxels * sizeof(nanovdb::Vec3f));
-	cudaDeviceSynchronize();
 
 	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
 	    nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
 	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
-	cudaDeviceSynchronize();
 
 	constexpr int blockSize = 256;
 	int numBlocks = (totalVoxels + blockSize - 1) / blockSize;
 	advect_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_outVel, totalVoxels, dt, voxelSize);
 
 	// Make sure kernel is finished before copying back
-	cudaDeviceSynchronize();
+	cudaStreamSynchronize(stream);
 
 	// Use synchronous copy for non-pinned memory
 	cudaMemcpy(velocity, d_outVel, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost);

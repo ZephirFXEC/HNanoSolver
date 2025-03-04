@@ -39,17 +39,12 @@ class SOP_HNanoVDBAdvectCache final : public SOP_NodeCache {
    public:
 	SOP_HNanoVDBAdvectCache() : SOP_NodeCache() {}
 	~SOP_HNanoVDBAdvectCache() override {
-		if (!pAHandle.isEmpty()) {
-			pAHandle.reset();
-		}
-
-		if (!pBHandle.isEmpty()) {
-			pBHandle.reset();
+		if (!pTopologyHandle.isEmpty()) {
+			pTopologyHandle.reset();
 		}
 	}
 
-	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pAHandle;
-	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pBHandle;
+	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pTopologyHandle;
 };
 
 class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {

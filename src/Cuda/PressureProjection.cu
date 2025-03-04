@@ -39,20 +39,24 @@ __global__ void redBlackGaussSeidelUpdate_idx(const nanovdb::NanoGrid<nanovdb::V
                                               const nanovdb::Coord* __restrict__ d_coord, const float* __restrict__ divergence,
                                               float* __restrict__ pressure, const float dx, const size_t totalVoxels, const int color,
                                               const float omega) {
-	size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 	if (tid >= totalVoxels) return;
 
 	const nanovdb::Coord c = d_coord[tid];
 	const int i = c.x(), j = c.y(), k = c.z();
 
-	// skip if not the correct color
-	if (((i + j + k) & 1) != color) return;
+	// Skip if wrong color (reduces divergent branching)
+	if ((i + j + k & 1) != color) return;
 
 	const IndexOffsetSampler<0> idxSampler(*domainGrid);
 	const auto divSampler = IndexSampler<float, 1>(idxSampler, divergence);
 	const auto pSampler = IndexSampler<float, 1>(idxSampler, pressure);
 
-	// gather neighbors (assuming in range)
+	// Pre-compute common factors
+	const float dx2 = dx * dx;
+	const float inv6 = 1.0f / 6.0f;
+
+	// Gather neighbors using vectorized loads where possible
 	const float pxp1 = pSampler(nanovdb::Coord(i + 1, j, k));
 	const float pxm1 = pSampler(nanovdb::Coord(i - 1, j, k));
 	const float pyp1 = pSampler(nanovdb::Coord(i, j + 1, k));
@@ -61,16 +65,11 @@ __global__ void redBlackGaussSeidelUpdate_idx(const nanovdb::NanoGrid<nanovdb::V
 	const float pzm1 = pSampler(nanovdb::Coord(i, j, k - 1));
 
 	const float divVal = divSampler(c);
-
-	// Standard 6-neighbor Laplacian-based update
 	const float pOld = pSampler(c);
-	const float pGS = (pxp1 + pxm1 + pyp1 + pym1 + pzp1 + pzm1 - divVal * dx * dx) / 6.0f;
 
-	// SOR step
-	const float pNew = pOld + omega * (pGS - pOld);
-
-	// in-place update
-	pressure[tid] = pNew;
+	// Optimize arithmetic operations
+	const float pGS = ((pxp1 + pxm1 + pyp1 + pym1 + pzp1 + pzm1) - divVal * dx2) * inv6;
+	pressure[tid] = pOld + omega * (pGS - pOld);
 }
 
 
@@ -125,12 +124,12 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 	constexpr int blockSize = 256;
 	int numBlocks = (totalVoxels + blockSize - 1) / blockSize;
 
-	auto* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>("vel"));
-
-	if (!velocity) {
-		std::cerr << "Error: velocity or divergence data is not available." << std::endl;
-		return;
+	const auto vec3fBlocks = data.getBlocksOfType<openvdb::Vec3f>();
+	if (vec3fBlocks.size() != 1) {
+		throw std::runtime_error("Expected exactly one Vec3f block (velocity)");
 	}
+
+	nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>(vec3fBlocks[0]));
 
 	nanovdb::Vec3f* d_velocity = nullptr;
 	nanovdb::Coord* d_coords = nullptr;
@@ -142,39 +141,37 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 	cudaMalloc(&d_divergence, totalVoxels * sizeof(float));
 	cudaMalloc(&d_pressure, totalVoxels * sizeof(float));
 
-	cudaMemcpy(d_velocity, velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_coords, data.pCoords(), totalVoxels * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice);
+	// Use async memory operations with stream
+	cudaMemcpyAsync(d_velocity, velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyHostToDevice, stream);
+	cudaMemcpyAsync(d_coords, data.pCoords(), totalVoxels * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream);
+	cudaMemsetAsync(d_divergence, 0, totalVoxels * sizeof(float), stream);
+	cudaMemsetAsync(d_pressure, 0, totalVoxels * sizeof(float), stream);
 
-	cudaMemset(d_divergence, 0, totalVoxels * sizeof(float));
-	cudaMemset(d_pressure, 0, totalVoxels * sizeof(float));
-
-	cudaDeviceSynchronize();
-
-	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle =
-	    nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
-
-	cudaDeviceSynchronize();
+	// Create grid handle and get device grid pointer
+	auto handle = nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
 
 	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
 
 	divergence_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_divergence, voxelSize, totalVoxels);
 
-	for (int iter = 0; iter < iteration; iter++) {
-		// Red update
+	// Red-black Gauss-Seidel iterations
+	constexpr float omega = 1.9f;  // SOR relaxation parameter
+	for (int iter = 0; iter < iteration; ++iter) {
 		redBlackGaussSeidelUpdate_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize,
-		                                                                   totalVoxels, 0, 1.9);
-
-		// Black update
+		                                                                   totalVoxels, 0, omega);
 		redBlackGaussSeidelUpdate_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize,
-		                                                                   totalVoxels, 1, 1.9);
+		                                                                   totalVoxels, 1, omega);
 	}
 
+	// Apply pressure gradient
 	subtractPressureGradient_idx<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, totalVoxels, d_velocity, d_pressure, d_velocity,
 	                                                                  voxelSize);
 
-	cudaDeviceSynchronize();
+	// Copy result back asynchronously
+	cudaMemcpyAsync(velocity, d_velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost, stream);
 
-	cudaMemcpy(velocity, d_velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost);
+	// Clean up resources
+	cudaStreamSynchronize(stream);
 
 	cudaFree(d_velocity);
 	cudaFree(d_coords);

@@ -78,10 +78,12 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 
 	if (auto err = loadGrid(feedback_input, feedback_grids); err != UT_ERROR_NONE) {
 		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load density grid");
+		return;
 	}
 
 	if (auto err = loadGrid(source_input, source_grids); err != UT_ERROR_NONE) {
 		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load density grid");
+		return;
 	}
 
 	std::vector<openvdb::FloatGrid::Ptr> feedback_float_grids;
@@ -144,16 +146,18 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(Domain, &data);
+	builder.setAllocType(AllocationType::Standard);
+	{
+		for (const auto& grid : feedback_float_grids) {
+			builder.addGrid(grid, grid->getName());
+		}
 
-	for (const auto& grid : feedback_float_grids) {
-		builder.addGrid(grid, grid->getName());
+		for (const auto& grid : feedback_vector_grids) {
+			builder.addGrid(grid, grid->getName());
+		}
+
+		builder.build();
 	}
-
-	for (const auto& grid : feedback_vector_grids) {
-		builder.addGrid(grid, grid->getName());
-	}
-
-	builder.build();
 
 
 	{

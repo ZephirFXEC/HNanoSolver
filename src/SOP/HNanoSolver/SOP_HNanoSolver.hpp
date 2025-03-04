@@ -41,7 +41,7 @@ class SOP_HNanoSolver final : public SOP_Node {
 			case 0:
 				return "Input Grids";
 			default:
-				return "default";
+				return "Sourcing Grids";
 		}
 	}
 };

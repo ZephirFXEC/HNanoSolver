@@ -379,17 +379,6 @@ void IndexGridBuilderTest(AllocationType type) {
 
 	auto* velocityPtr = indexed_data.pValues<openvdb::Vec3f>("velocity");
 	ASSERT_NE(velocityPtr, nullptr);
-
-	for (size_t i = 0; i < indexed_data.size(); ++i) {
-		uint64_t idx = indexed_data.pIndexes()[i];
-
-		float density = densityPtr[idx];
-		openvdb::Vec3f velocity = velocityPtr[idx];
-
-		if (density == 420) {
-			EXPECT_EQ(density, velocity[0]);
-		}
-	}
 }
 
 TEST(GridIndexedDataTest, ExtractFromVDB) {
@@ -479,17 +468,6 @@ TEST(GridIndexedDataTest, ExtractFromVDB) {
 
 	auto* velocityPtr = indexed_data.pValues<openvdb::Vec3f>("velocity");
 	ASSERT_NE(velocityPtr, nullptr);
-
-	for (size_t i = 0; i < indexed_data.size(); ++i) {
-		uint64_t idx = indexed_data.pIndexes()[i];
-
-		float density = densityPtr[idx];
-		openvdb::Vec3f velocity = velocityPtr[idx];
-
-		if (density == 420) {
-			EXPECT_EQ(density, velocity[0]);
-		}
-	}
 }
 
 TEST(GridIndexedDataTest, AllocateCoordsAndAddBlocks) {
@@ -499,12 +477,6 @@ TEST(GridIndexedDataTest, AllocateCoordsAndAddBlocks) {
 	bool success = grid.allocateCoords(numElements);
 	EXPECT_TRUE(success);
 	EXPECT_EQ(grid.size(), numElements);
-
-	auto* idx = grid.pIndexes();
-	ASSERT_NE(idx, nullptr);
-	for (size_t i = 0; i < numElements; ++i) {
-		idx[i] = 100 + i;
-	}
 
 	success = grid.addValueBlock<float>("density", numElements);
 	EXPECT_TRUE(success);
@@ -536,10 +508,7 @@ TEST(GridIndexedDataTest, AllocateCoordsAndAddBlocks) {
 	}
 
 	for (size_t i = 0; i < numElements; ++i) {
-		EXPECT_EQ(idx[i], 100 + i);
-
 		EXPECT_FLOAT_EQ(densityPtr[i], static_cast<float>(i) * 1.1f);
-
 		EXPECT_FLOAT_EQ(velocityPtr[i].x, static_cast<float>(i) + 0.1f);
 		EXPECT_FLOAT_EQ(velocityPtr[i].y, static_cast<float>(i) + 0.2f);
 		EXPECT_FLOAT_EQ(velocityPtr[i].z, static_cast<float>(i) + 0.3f);
@@ -555,10 +524,8 @@ TEST(GridIndexedDataTest, ClearBlocks) {
 	success = grid.addValueBlock<float>("density", numElements);
 	EXPECT_TRUE(success);
 
-	auto* idx = grid.pIndexes();
 	auto* density = grid.pValues<float>("density");
 	for (size_t i = 0; i < numElements; ++i) {
-		idx[i] = i;
 		density[i] = static_cast<float>(i);
 	}
 
@@ -615,7 +582,6 @@ TEST(GridIndexedDataTest, MiniSampler) {
 		if (indexed_data.pValues<float>("density")[i] == 1) {
 			printf("Iter : %d\n", i);
 			printf("Coord : %d %d %d\n", indexed_data.pCoords()[i].x(), indexed_data.pCoords()[i].y(), indexed_data.pCoords()[i].z());
-			printf("Index at Iter: %llu\n", indexed_data.pIndexes()[i]);
 		}
 	}
 }

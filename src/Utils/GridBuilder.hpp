@@ -168,8 +168,6 @@ class IndexGridBuilder {
 				for (auto iter = leaf.cbeginValueOn(); iter.test(); ++iter) {
 					const size_t outIdx = leafBaseOffset + localIdx;
 
-					m_outData->pIndexes()[outIdx] = static_cast<uint32_t>(outIdx);
-
 					const openvdb::Coord& c = iter.getCoord();
 
 					m_outData->pCoords()[outIdx] = c;
@@ -607,9 +605,6 @@ inline void extractToGlobalIdx(const openvdb::VectorGrid::ConstPtr& domain, cons
 			for (auto iter = leaf.cbeginValueOn(); iter.test(); ++iter) {
 				// Compute the final "global" index for this voxel
 				const size_t outIdx = leafBaseOffset + localIdx;
-
-				// Store that global index in coords
-				out_data.pIndexes()[outIdx] = outIdx;
 
 				// Retrieve the float value from 'grid' at the same coordinate
 				const openvdb::Coord& c = iter.getCoord();

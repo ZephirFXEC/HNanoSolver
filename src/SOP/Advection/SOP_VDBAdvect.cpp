@@ -77,11 +77,23 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 	std::vector<openvdb::VectorGrid::Ptr> BGrid;  // Velocity grid ( len = 1 )
 
 	if (auto err = loadGrid<openvdb::FloatGrid>(ageo, AGrid, sopparms.getAgroup()); err != UT_ERROR_NONE) {
-		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load density grid");
+		err = cookparms.sopAddError(SOP_MESSAGE, "No input geometry found in Input 0");
+		return;
 	}
 
 	if (auto err = loadGrid<openvdb::VectorGrid>(bgeo, BGrid, sopparms.getBgroup()); err != UT_ERROR_NONE) {
-		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load velocity grid");
+		err = cookparms.sopAddError(SOP_MESSAGE, "No input geometry found in Input 1");
+		return;
+	}
+
+	if (BGrid.empty()) {
+		cookparms.sopAddError(SOP_MESSAGE, "No velocity grid found");
+		return;
+	}
+
+	if (AGrid.empty()) {
+		cookparms.sopAddError(SOP_MESSAGE, "No grid found to advect");
+		return;
 	}
 
 	cudaStream_t stream;
@@ -119,14 +131,25 @@ void SOP_HNanoVDBAdvectVerb::cook(const SOP_NodeVerb::CookParms& cookparms) cons
 	}
 
 	{
-		openvdb::FloatGrid::Ptr density, temperature, fuel;
-		tbb::parallel_invoke([&] { density = builder.writeIndexGrid<openvdb::FloatGrid>("density", AGrid[0]->voxelSize()[0]); },
-		                     [&] { temperature = builder.writeIndexGrid<openvdb::FloatGrid>("temperature", AGrid[0]->voxelSize()[0]); },
-		                     [&] { fuel = builder.writeIndexGrid<openvdb::FloatGrid>("fuel", AGrid[0]->voxelSize()[0]); });
+		std::vector<openvdb::FloatGrid::Ptr> outGrids(AGrid.size());
+		std::vector<std::future<void>> futures;
 
-		GU_PrimVDB::buildFromGrid(*detail, density, nullptr, density->getName().c_str());
-		GU_PrimVDB::buildFromGrid(*detail, temperature, nullptr, temperature->getName().c_str());
-		GU_PrimVDB::buildFromGrid(*detail, fuel, nullptr, fuel->getName().c_str());
+		// Create output grids in parallel
+		for (size_t i = 0; i < AGrid.size(); ++i) {
+			futures.push_back(std::async(std::launch::async, [&, i] {
+				outGrids[i] = builder.writeIndexGrid<openvdb::FloatGrid>(AGrid[i]->getName(), AGrid[0]->voxelSize()[0]);
+			}));
+		}
+
+		// Wait for all grid creation to complete
+		for (auto& future : futures) {
+			future.wait();
+		}
+
+		// Create VDB primitives
+		for (const auto & outGrid : outGrids) {
+			GU_PrimVDB::buildFromGrid(*detail, outGrid, nullptr, outGrid->getName().c_str());
+		}
 	}
 
 	cudaStreamDestroy(stream);
