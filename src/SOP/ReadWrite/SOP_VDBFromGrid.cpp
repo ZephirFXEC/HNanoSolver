@@ -17,9 +17,6 @@
 #include "nanovdb/tools/CreateNanoGrid.h"
 
 
-extern "C" void launch_kernels(HNS::GridIndexedData& data, float dt, float voxelSize, cudaStream_t stream);
-extern "C" void gpu_index_grid(HNS::GridIndexedData& data, float voxelSize, const cudaStream_t& stream);
-
 const char* const SOP_HNanoVDBFromGridVerb::theDsFile = R"THEDSFILE(
 {
     name        parameters
@@ -120,7 +117,7 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	{
 		ScopedTimer timer("Launching kernels");
 		const float deltaTime = static_cast<float>(sopparms.getTimestep());
-		launch_kernels(data, deltaTime, AGrid[0]->voxelSize()[0], stream);
+		//launch_kernels(data, deltaTime, AGrid[0]->voxelSize()[0], stream);
 	}
 
 

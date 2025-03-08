@@ -14,9 +14,13 @@ inline size_t blocksPerGrid(const size_t numItems, const size_t threadsPerBlock)
 	return (numItems + threadsPerBlock - 1) / threadsPerBlock;
 }
 
-template <typename T>
-__device__ __forceinline__ T computeError(const T& value, const T& value_backward) {
-	return static_cast<T>(0.5f) * (value - value_backward);
+__device__ __forceinline__ float computeError(const float original, const float backward) {
+	return __fmul_rn(0.5f, __fsub_rn(original, backward));
+}
+
+__device__ __forceinline__ nanovdb::Vec3f computeError(const nanovdb::Vec3f& original, const nanovdb::Vec3f& backward) {
+	return nanovdb::Vec3f(computeError(original[0], backward[0]), computeError(original[1], backward[1]),
+	                      computeError(original[2], backward[2]));
 }
 
 __device__ __forceinline__ float absValue(const float x) { return fabsf(x); }
@@ -25,10 +29,14 @@ __device__ __forceinline__ nanovdb::Vec3f absValue(const nanovdb::Vec3f& v) {
 	return nanovdb::Vec3f(fabsf(v[0]), fabsf(v[1]), fabsf(v[2]));
 }
 
-template <typename T>
-__device__ __forceinline__ T computeMaxCorrection(const T& value_forward, const T& value) {
-	return static_cast<T>(0.5f) * absValue(value_forward - value);
+__device__ __forceinline__ float computeMaxCorrection(const float forward, const float original) {
+	return __fmul_rn(0.5f, fabsf(__fsub_rn(forward, original)));
 }
+__device__ __forceinline__ nanovdb::Vec3f computeMaxCorrection(const nanovdb::Vec3f& original, const nanovdb::Vec3f& backward) {
+	return nanovdb::Vec3f(computeMaxCorrection(original[0], backward[0]), computeMaxCorrection(original[1], backward[1]),
+	                      computeMaxCorrection(original[2], backward[2]));
+}
+
 
 __device__ __forceinline__ float clampValue(const float x, const float minVal, const float maxVal) {
 	return fminf(fmaxf(x, minVal), maxVal);
@@ -91,4 +99,31 @@ inline __device__ nanovdb::Vec3f MACToFaceCentered(
 	const float wm = velSampler(pos - nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
 
 	return {(up + um) / 2.0f, (vp + vm) / 2.0f, (wp + wm) / 2.0f};
+}
+
+template <typename VelocitySampler>
+__device__ nanovdb::Vec3f rk4_integrate(const VelocitySampler& sampler, nanovdb::Vec3f start_pos, float h) {
+	const nanovdb::Vec3f k1 = sampler(start_pos) * h;
+	const nanovdb::Vec3f k2 = sampler(start_pos + 0.5f * k1) * h;
+	const nanovdb::Vec3f k3 = sampler(start_pos + 0.5f * k2) * h;
+	const nanovdb::Vec3f k4 = sampler(start_pos + k3) * h;
+
+	nanovdb::Vec3f result = start_pos;
+	result[0] = __fmaf_rn(0.16667f, k1[0] + k4[0] + 2.0f * (k2[0] + k3[0]), start_pos[0]);
+	result[1] = __fmaf_rn(0.16667f, k1[1] + k4[1] + 2.0f * (k2[1] + k3[1]), start_pos[1]);
+	result[2] = __fmaf_rn(0.16667f, k1[2] + k4[2] + 2.0f * (k2[2] + k3[2]), start_pos[2]);
+	return result;
+}
+
+template <typename VelocitySampler>
+__device__ nanovdb::Vec3f rk3_integrate(const VelocitySampler& sampler, nanovdb::Vec3f start_pos, float h) {
+	const nanovdb::Vec3f k1 = sampler(start_pos) * h;
+	const nanovdb::Vec3f k2 = sampler(start_pos + 0.5f * k1) * h;
+	const nanovdb::Vec3f k3 = sampler(start_pos - k1 + 2.0f * k2) * h;
+
+	nanovdb::Vec3f result = start_pos;
+	result[0] = __fmaf_rn(0.33333f, k1[0] + 3.0f * k2[0] + k3[0], start_pos[0]);
+	result[1] = __fmaf_rn(0.33333f, k1[1] + 3.0f * k2[1] + k3[1], start_pos[1]);
+	result[2] = __fmaf_rn(0.33333f, k1[2] + 3.0f * k2[2] + k3[2], start_pos[2]);
+	return result;
 }

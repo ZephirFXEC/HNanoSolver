@@ -14,7 +14,8 @@
 
 #include "../Utils/GridData.hpp"
 #include "SOP_HNanoSolver.proto.h"
-#include "nanovdb/NanoVDB.h"
+#include "nanovdb/GridHandle.h"
+#include "nanovdb/cuda/DeviceBuffer.h"
 
 class SOP_HNanoSolver final : public SOP_Node {
    public:
@@ -67,3 +68,8 @@ class SOP_HNanoSolverVerb final : public SOP_NodeVerb {
 	static const SOP_NodeVerb::Register<SOP_HNanoSolverVerb> theVerb;
 	static const char* const theDsFile;
 };
+
+extern "C" void CreateIndexGrid(HNS::GridIndexedData& data, nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, float voxelSize);
+
+extern "C" void Compute_Sim(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, int iteration,
+                            float dt, float voxelSize, const cudaStream_t& stream);

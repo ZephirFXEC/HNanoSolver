@@ -13,7 +13,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Define build options
 option(HNS_BUILD_SOP "Build SOP components" ON)
-option(HNS_BUILD_TESTS "Build tests" ON)
+option(HNS_BUILD_TESTS "Build tests" OFF)
 option(HNS_BUILD_VIEWER "Build HNanoViewer" OFF)
 
 # Set default build type if not specified

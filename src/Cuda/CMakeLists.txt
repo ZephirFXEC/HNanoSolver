@@ -5,9 +5,11 @@ include_directories(../../externals)
 
 add_library(Kernels STATIC
         Utils.cuh
-        Kernels.cu
+        Kernels.cuh
         Advection.cu
         PressureProjection.cu
+        Combustion.cu
+        HNanoSolver.cu
 )
 
 target_compile_options(Kernels PRIVATE
