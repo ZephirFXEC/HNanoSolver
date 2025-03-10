@@ -4,8 +4,8 @@
 #pragma once
 
 #include <openvdb/Types.h>
-#include "Memory.hpp"
 
+#include "Memory.hpp"
 #include "typeindex"
 
 namespace HNS {
@@ -30,20 +30,16 @@ struct GridIndexedData {
 	/// @param mode the memory allocation mode (standard/aligned/cuda pinned)
 	/// @return true on success
 	bool allocateCoords(const size_t numElements) {
-		clearIndexes();  // in case we re-allocate
 		clearCoords();
 		bool success = false;
 		switch (m_allocType) {
 			case AllocationType::Standard:
-				success = m_IndexBlock.allocateStandard(numElements);
 				success = m_CoordBlock.allocateStandard(numElements);
 				break;
 			case AllocationType::Aligned:
-				success = m_IndexBlock.allocateAligned(numElements);
 				success = m_CoordBlock.allocateAligned(numElements);
 				break;
 			case AllocationType::CudaPinned:
-				success = m_IndexBlock.allocateCudaPinned(numElements);
 				success = m_CoordBlock.allocateCudaPinned(numElements);
 				break;
 		}
@@ -91,10 +87,6 @@ struct GridIndexedData {
 		return static_cast<TypedValueBlock<T>*>(entry.block.get());
 	}
 
-	/// @return pointer to the Index array (null if unallocated)
-	[[nodiscard]] uint64_t* pIndexes() { return m_IndexBlock.ptr.get(); }
-	[[nodiscard]] const uint64_t* pIndexes() const { return m_IndexBlock.ptr.get(); }
-
 	/// @return pointer to the Coord array (null if unallocated)
 	[[nodiscard]] openvdb::Coord* pCoords() { return m_CoordBlock.ptr.get(); }
 	[[nodiscard]] const openvdb::Coord* pCoords() const { return m_CoordBlock.ptr.get(); }
@@ -104,6 +96,12 @@ struct GridIndexedData {
 	template <typename T>
 	T* pValues(const std::string& name) {
 		auto* block = getValueBlock<T>(name);
+		return block ? block->data() : nullptr;
+	}
+
+	/// @brief returns every openvdb::vec3f without name
+	[[nodiscard]] openvdb::Vec3f* pValues() {
+		auto* block = getValueBlock<openvdb::Vec3f>("velocity");
 		return block ? block->data() : nullptr;
 	}
 
@@ -124,14 +122,11 @@ struct GridIndexedData {
 
 	/// @brief Deallocate everything
 	void clear() {
-		clearIndexes();
 		clearValues();
 		clearCoords();
 		m_size = 0;
 	}
 
-	/// @brief Deallocate only the coords block
-	void clearIndexes() { m_IndexBlock.clear(); }
 
 	/// @brief Deallocate only the values blocks
 	void clearValues() {
@@ -143,6 +138,18 @@ struct GridIndexedData {
 
 	void setAllocationType(const AllocationType type) { m_allocType = type; }
 
+	template <typename T>
+	std::vector<std::string> getBlocksOfType() const {
+		std::vector<std::string> names;
+		const auto targetType = std::type_index(typeid(T));
+		for (const auto& entry : m_valueBlocks) {
+			if (entry.type == targetType) {
+				names.push_back(entry.name);
+			}
+		}
+		return names;
+	}
+
    private:
 	/// @brief Find index of block by name, or -1 if none
 	[[nodiscard]] int findBlockIndex(const std::string& name) const {
@@ -150,20 +157,17 @@ struct GridIndexedData {
 		return it != m_blockNameMap.end() ? static_cast<int>(it->second) : -1;
 	}
 
-	// The Index block (one array)
-	MemoryBlock<uint64_t> m_IndexBlock{};
-	MemoryBlock<openvdb::Coord> m_CoordBlock{};
-	size_t m_size{0};
-
-	AllocationType m_allocType{AllocationType::Standard};
-
 	struct ValueBlockEntry {
 		std::unique_ptr<IValueBlock> block;
 		std::string name;
 		std::type_index type;
 	};
 
+	MemoryBlock<openvdb::Coord> m_CoordBlock{};
 	std::vector<ValueBlockEntry> m_valueBlocks{};
 	std::unordered_map<std::string, size_t> m_blockNameMap{};
+
+	size_t m_size{0};
+	AllocationType m_allocType{AllocationType::Standard};
 };
 }  // namespace HNS

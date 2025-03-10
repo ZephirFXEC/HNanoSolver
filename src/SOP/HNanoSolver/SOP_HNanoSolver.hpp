@@ -11,10 +11,11 @@
 #include <PRM/PRM_TemplateBuilder.h>
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
-#include <nanovdb/NanoVDB.h>
 
-#include "Utils/GridData.hpp"
+#include "../Utils/GridData.hpp"
 #include "SOP_HNanoSolver.proto.h"
+#include "nanovdb/GridHandle.h"
+#include "nanovdb/cuda/DeviceBuffer.h"
 
 class SOP_HNanoSolver final : public SOP_Node {
    public:
@@ -29,9 +30,7 @@ class SOP_HNanoSolver final : public SOP_Node {
 
 	static PRM_Template* buildTemplates();
 
-	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) {
-		return new SOP_HNanoSolver(net, name, op);
-	}
+	static OP_Node* myConstructor(OP_Network* net, const char* name, OP_Operator* op) { return new SOP_HNanoSolver(net, name, op); }
 
 	OP_ERROR cookMySop(OP_Context& context) override { return cookMyselfAsVerb(context); }
 
@@ -43,7 +42,7 @@ class SOP_HNanoSolver final : public SOP_Node {
 			case 0:
 				return "Input Grids";
 			default:
-				return "default";
+				return "Sourcing Grids";
 		}
 	}
 };
@@ -52,7 +51,6 @@ class SOP_HNanoSolverCache final : public SOP_NodeCache {
    public:
 	SOP_HNanoSolverCache() : SOP_NodeCache() {}
 	~SOP_HNanoSolverCache() override = default;
-
 };
 
 class SOP_HNanoSolverVerb final : public SOP_NodeVerb {
@@ -70,3 +68,8 @@ class SOP_HNanoSolverVerb final : public SOP_NodeVerb {
 	static const SOP_NodeVerb::Register<SOP_HNanoSolverVerb> theVerb;
 	static const char* const theDsFile;
 };
+
+extern "C" void CreateIndexGrid(HNS::GridIndexedData& data, nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, float voxelSize);
+
+extern "C" void Compute_Sim(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, int iteration,
+                            float dt, float voxelSize, const cudaStream_t& stream);

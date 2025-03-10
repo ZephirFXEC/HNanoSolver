@@ -1,12 +1,15 @@
 enable_language(CUDA)
 
 include_directories("$ENV{HFS}/toolkit/include")
+include_directories(../../externals)
 
 add_library(Kernels STATIC
-        utils.cuh
-        Kernels.cu
+        Utils.cuh
+        Kernels.cuh
         Advection.cu
         PressureProjection.cu
+        Combustion.cu
+        HNanoSolver.cu
 )
 
 target_compile_options(Kernels PRIVATE
@@ -16,7 +19,7 @@ target_compile_options(Kernels PRIVATE
 target_include_directories(Kernels
         PUBLIC
         ${CUDAToolkit_INCLUDE_DIRS}
-        ${CMAKE_CURRENT_SOURCE_DIR}  # for your .cuh headers
+        .  # for your .cuh headers
 )
 target_link_libraries(Kernels PRIVATE CUDA::cudart)
 

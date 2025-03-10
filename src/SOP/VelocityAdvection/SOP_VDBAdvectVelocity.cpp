@@ -3,15 +3,16 @@
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimVDB.h>
 #include <GU/GU_PrimVolume.h>
+#include <PRM/PRM_TemplateBuilder.h>
 #include <UT/UT_DSOVersion.h>
 #include <tbb/enumerable_thread_specific.h>
 
-#include "Utils/GridBuilder.hpp"
-#include "Utils/ScopedTimer.hpp"
-#include "Utils/Utils.hpp"
+#include "../Utils/GridBuilder.hpp"
+#include "../Utils/ScopedTimer.hpp"
+#include "../Utils/Utils.hpp"
 
 #define NANOVDB_USE_OPENVDB
-#include <nanovdb/tools/CreateNanoGrid.h>
+#include "nanovdb/tools/CreateNanoGrid.h"
 
 
 void newSopOperator(OP_OperatorTable* table) {
@@ -67,15 +68,18 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 
 	if (auto err = loadGrid<openvdb::VectorGrid>(ageo, AGrid, sopparms.getAgroup()); err != UT_ERROR_NONE) {
 		err = cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
+		return;
+	}
+
+	if (AGrid == nullptr) {
+		cookparms.sopAddError(SOP_MESSAGE, "No velocity grid found");
+		return;
 	}
 
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
 
 	using SrcGridT = openvdb::FloatGrid;
-	using DstBuildT = nanovdb::ValueOnIndex;
-	using BufferT = nanovdb::cuda::DeviceBuffer;
-
 
 	SrcGridT::Ptr domain = openvdb::createGrid<openvdb::FloatGrid>();
 	{
@@ -88,7 +92,7 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
 	builder.setAllocType(AllocationType::Standard);
 	{
-		builder.addGrid(AGrid, "vel");
+		builder.addGrid(AGrid, AGrid->getName());
 		builder.build();
 	}
 
@@ -99,8 +103,7 @@ void SOP_HNanoAdvectVelocityVerb::cook(const CookParms& cookparms) const {
 	}
 
 	{
-		openvdb::VectorGrid::Ptr vel = builder.writeIndexGrid<openvdb::VectorGrid>("vel", AGrid->voxelSize()[0]);
-
+		const openvdb::VectorGrid::Ptr vel = builder.writeIndexGrid<openvdb::VectorGrid>(AGrid->getName(), AGrid->voxelSize()[0]);
 		GU_PrimVDB::buildFromGrid(*detail, vel, nullptr, vel->getName().c_str());
 	}
 

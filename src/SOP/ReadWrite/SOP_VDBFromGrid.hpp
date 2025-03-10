@@ -6,12 +6,12 @@
 #include <PRM/PRM_TemplateBuilder.h>
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
-#include <nanovdb/NanoVDB.h>
 
-#include <Utils/GridData.hpp>
+#include <../Utils/GridData.hpp>
 
 #include "BrickMap/BrickMap.cuh"
 #include "SOP_VDBFromGrid.proto.h"
+#include "nanovdb/NanoVDB.h"
 
 class BrickMapSingleton {
    public:

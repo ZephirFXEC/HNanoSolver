@@ -8,11 +8,11 @@
 #include <PRM/PRM_TemplateBuilder.h>
 #include <UT/UT_DSOVersion.h>
 
-#include "Utils/GridBuilder.hpp"
-#include "Utils/ScopedTimer.hpp"
+#include "../Utils/GridBuilder.hpp"
+#include "../Utils/ScopedTimer.hpp"
 
 #define NANOVDB_USE_OPENVDB
-#include <nanovdb/tools/CreateNanoGrid.h>
+#include "nanovdb/tools/CreateNanoGrid.h"
 
 
 const char* const SOP_HNanoVDBProjectNonDivergentVerb::theDsFile = R"THEDSFILE(
@@ -83,6 +83,7 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 	openvdb::VectorGrid::Ptr in_velocity = nullptr;
 	if (auto err = loadGrid<openvdb::VectorGrid>(in_geo, in_velocity, sopparms.getVelgrid()); err != UT_ERROR_NONE) {
 		err = cookparms.sopAddError(SOP_MESSAGE, "No input geometry found");
+		return;
 	}
 
 
@@ -99,14 +100,13 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 		ScopedTimer timer("Merging topology");
 		domain->topologyUnion(*in_velocity);
 		domain->tree().voxelizeActiveTiles();
-
 	}
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
 	builder.setAllocType(AllocationType::Standard);
 	{
-		builder.addGrid(in_velocity, "vel");
+		builder.addGrid(in_velocity, in_velocity->getName());
 		builder.build();
 	}
 
@@ -116,7 +116,7 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 	}
 
 	{
-		openvdb::VectorGrid::Ptr div = builder.writeIndexGrid<openvdb::VectorGrid>("vel", in_velocity->voxelSize()[0]);
+		openvdb::VectorGrid::Ptr div = builder.writeIndexGrid<openvdb::VectorGrid>(in_velocity->getName(), in_velocity->voxelSize()[0]);
 		GU_PrimVDB::buildFromGrid(*detail, div, nullptr, div->getName().c_str());
 	}
 

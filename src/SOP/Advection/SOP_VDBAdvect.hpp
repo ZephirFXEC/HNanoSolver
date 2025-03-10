@@ -2,12 +2,12 @@
 
 #include <SOP/SOP_Node.h>
 #include <SOP/SOP_NodeVerb.h>
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/cuda/DeviceBuffer.h>
 
+#include "../Utils/GridData.hpp"
+#include "../Utils/Utils.hpp"
 #include "SOP_VDBAdvect.proto.h"
-#include "Utils/GridData.hpp"
-#include "Utils/Utils.hpp"
+#include "nanovdb/GridHandle.h"
+#include "nanovdb/cuda/DeviceBuffer.h"
 
 class SOP_HNanoVDBAdvect final : public SOP_Node {
    public:
@@ -39,17 +39,12 @@ class SOP_HNanoVDBAdvectCache final : public SOP_NodeCache {
    public:
 	SOP_HNanoVDBAdvectCache() : SOP_NodeCache() {}
 	~SOP_HNanoVDBAdvectCache() override {
-		if (!pAHandle.isEmpty()) {
-			pAHandle.reset();
-		}
-
-		if (!pBHandle.isEmpty()) {
-			pBHandle.reset();
+		if (!pTopologyHandle.isEmpty()) {
+			pTopologyHandle.reset();
 		}
 	}
 
-	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pAHandle;
-	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pBHandle;
+	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> pTopologyHandle;
 };
 
 class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
@@ -68,5 +63,4 @@ class SOP_HNanoVDBAdvectVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
-extern "C" void AdvectIndexGrid(HNS::GridIndexedData& data, float dt,
-                                float voxelSize, const cudaStream_t& stream);
+extern "C" void AdvectIndexGrid(HNS::GridIndexedData& data, float dt, float voxelSize, const cudaStream_t& stream);

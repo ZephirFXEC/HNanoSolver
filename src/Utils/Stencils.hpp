@@ -7,21 +7,32 @@
 // Only define __hostdev__ when compiling as NVIDIA CUDA
 #if defined(__CUDACC__) || defined(__HIP__)
 #define __hostdev__ __host__ __device__
+#include <cuda_runtime.h>  // for __float2int_rd
 #else
 #include <cmath>  // for floor
 #define __hostdev__
 #endif
 
-#include <nanovdb/math/Math.h>
+#include "nanovdb/NanoVDB.h"
+#include "nanovdb/math/Math.h"
+
+inline __device__ nanovdb::Vec3f __fmaf_rn(const float a, const nanovdb::Vec3f& b, const nanovdb::Vec3f& c) {
+	return nanovdb::Vec3f(__fmaf_rn(a, b[0], c[0]), __fmaf_rn(a, b[1], c[1]), __fmaf_rn(a, b[2], c[2]));
+}
 
 
 template <template <typename> class Vec3T>
 __hostdev__ inline nanovdb::Coord Floor(Vec3T<float>& xyz) {
-	const float ijk[3] = {floorf(xyz[0]), floorf(xyz[1]), floorf(xyz[2])};
-	xyz[0] -= ijk[0];
-	xyz[1] -= ijk[1];
-	xyz[2] -= ijk[2];
-	return nanovdb::Coord(int32_t(ijk[0]), int32_t(ijk[1]), int32_t(ijk[2]));
+	const int32_t i = __float2int_rd(xyz[0]);
+	const int32_t j = __float2int_rd(xyz[1]);
+	const int32_t k = __float2int_rd(xyz[2]);
+
+	// Compute fractional parts in a more optimized way
+	xyz[0] -= static_cast<float>(i);
+	xyz[1] -= static_cast<float>(j);
+	xyz[2] -= static_cast<float>(k);
+
+	return nanovdb::Coord(i, j, k);
 }
 
 template <int Order>
@@ -37,10 +48,15 @@ class IndexOffsetSampler<0> {
    public:
 	__hostdev__ explicit IndexOffsetSampler(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>& grid) : mAcc(grid) {}
 
-	__hostdev__ [[nodiscard]] uint64_t offset(const int i, const int j, const int k) const { return mAcc.idx(i, j, k) - 1; }
-	__hostdev__ [[nodiscard]] uint64_t offset(const nanovdb::Coord ijk) const { return mAcc.getIndex(ijk) - 1; }
-	__hostdev__ [[nodiscard]] bool isActive(const int i, const int j, const int k) const { return mAcc.isActive(nanovdb::Coord(i, j, k)); }
-	__hostdev__ [[nodiscard]] bool isActive(const nanovdb::Coord ijk) const { return mAcc.isActive(ijk); }
+	__hostdev__ __forceinline__ uint64_t offset(const int i, const int j, const int k) const { return mAcc.idx(i, j, k) - 1; }
+
+	__hostdev__ __forceinline__ uint64_t offset(const nanovdb::Coord ijk) const { return mAcc.getIndex(ijk) - 1; }
+
+	__hostdev__ __forceinline__ bool isActive(const int i, const int j, const int k) const {
+		return mAcc.isActive(nanovdb::Coord(i, j, k));
+	}
+
+	__hostdev__ __forceinline__ bool isActive(const nanovdb::Coord ijk) const { return mAcc.isActive(ijk); }
 
    private:
 	AccessorT mAcc;
@@ -53,17 +69,14 @@ class IndexSampler<ValueT, 0> {
 	__hostdev__ explicit IndexSampler(const IndexOffsetSampler<0>& offsetSampler, const ValueT* data)
 	    : mOffsetSampler(offsetSampler), mPos(nanovdb::Coord::max()), mOffset(0), mIsActive(false), mData(data) {}
 
-	__hostdev__ bool isDataActive(const nanovdb::Coord& ijk) const {
+	__hostdev__ __forceinline__ bool isDataActive(const nanovdb::Coord& ijk) const {
 		updateCache(ijk);
 		return mIsActive && mData[mOffset] != ValueT(0);
 	}
 
-	__hostdev__ ValueT operator()(const nanovdb::Coord& ijk) const {
+	__hostdev__ __forceinline__ ValueT operator()(const nanovdb::Coord& ijk) const {
 		updateCache(ijk);
-		if (!mIsActive) {
-			return ValueT(0);
-		}
-		return mData[mOffset];
+		return mIsActive ? mData[mOffset] : ValueT(0);
 	}
 
    private:
@@ -96,35 +109,53 @@ class TrilinearSampler {
 	__hostdev__ void stencil(const nanovdb::Coord& ijk, ValueT (&v)[2][2][2]) const {
 		// Local copy to preserve original coordinates.
 		nanovdb::Coord tmp = ijk;
-		auto getVal = [&](int di, int dj, int dk) -> ValueT {
-			const nanovdb::Coord coord(tmp[0] + di, tmp[1] + dj, tmp[2] + dk);
-			return mNearestSampler(coord);
-		};
 
 		// ZYX order traversal (v[x][y][z])
-		v[0][0][0] = getVal(0, 0, 0);  // (i, j, k)
-		v[0][0][1] = getVal(0, 0, 1);  // (i, j, k+1)
-		v[0][1][0] = getVal(0, 1, 0);  // (i, j+1, k)
-		v[0][1][1] = getVal(0, 1, 1);  // (i, j+1, k+1)
-		v[1][0][0] = getVal(1, 0, 0);  // (i+1, j, k)
-		v[1][0][1] = getVal(1, 0, 1);  // (i+1, j, k+1)
-		v[1][1][0] = getVal(1, 1, 0);  // (i+1, j+1, k)
-		v[1][1][1] = getVal(1, 1, 1);  // (i+1, j+1, k+1)
+		// Pre-compute common offsets to reduce coordinate calculations
+		const nanovdb::Coord c000(tmp[0], tmp[1], tmp[2]);
+		const nanovdb::Coord c001(tmp[0], tmp[1], tmp[2] + 1);
+		const nanovdb::Coord c010(tmp[0], tmp[1] + 1, tmp[2]);
+		const nanovdb::Coord c011(tmp[0], tmp[1] + 1, tmp[2] + 1);
+		const nanovdb::Coord c100(tmp[0] + 1, tmp[1], tmp[2]);
+		const nanovdb::Coord c101(tmp[0] + 1, tmp[1], tmp[2] + 1);
+		const nanovdb::Coord c110(tmp[0] + 1, tmp[1] + 1, tmp[2]);
+		const nanovdb::Coord c111(tmp[0] + 1, tmp[1] + 1, tmp[2] + 1);
+
+
+		// Gather values with direct coordinate access
+		v[0][0][0] = mNearestSampler(c000);
+		v[0][0][1] = mNearestSampler(c001);
+		v[0][1][0] = mNearestSampler(c010);
+		v[0][1][1] = mNearestSampler(c011);
+		v[1][0][0] = mNearestSampler(c100);
+		v[1][0][1] = mNearestSampler(c101);
+		v[1][1][0] = mNearestSampler(c110);
+		v[1][1][1] = mNearestSampler(c111);
 	}
 
 	template <typename RealT, template <typename...> class Vec3T>
-	static __hostdev__ ValueT sample(const Vec3T<RealT>& uvw, const ValueT (&v)[2][2][2]) {
-		auto lerp = [](ValueT a, ValueT b, RealT w) { return a + ValueT(w) * (b - a); };
+	static __hostdev__ ValueT sample(const Vec3T<RealT>& uvw, const ValueT (&stencil)[2][2][2]) {
+		const RealT u = uvw[0];
+		const RealT v = uvw[1];
+		const RealT w = uvw[2];
 
-		const ValueT z0 = lerp(v[0][0][0], v[0][0][1], uvw[2]);
-		const ValueT z1 = lerp(v[0][1][0], v[0][1][1], uvw[2]);
-		const ValueT z2 = lerp(v[1][0][0], v[1][0][1], uvw[2]);
-		const ValueT z3 = lerp(v[1][1][0], v[1][1][1], uvw[2]);
+		// Compute complementary weights
+		const RealT u1 = RealT(1) - u;
+		const RealT v1 = RealT(1) - v;
+		const RealT w1 = RealT(1) - w;
 
-		const ValueT y0 = lerp(z0, z1, uvw[1]);
-		const ValueT y1 = lerp(z2, z3, uvw[1]);
+		// First interpolate along Z
+		const ValueT z00 = __fmaf_rn(w, stencil[0][0][1], w1 * stencil[0][0][0]);
+		const ValueT z01 = __fmaf_rn(w, stencil[0][1][1], w1 * stencil[0][1][0]);
+		const ValueT z10 = __fmaf_rn(w, stencil[1][0][1], w1 * stencil[1][0][0]);
+		const ValueT z11 = __fmaf_rn(w, stencil[1][1][1], w1 * stencil[1][1][0]);
 
-		return lerp(y0, y1, uvw[0]);
+		// Then along Y
+		const ValueT y0 = __fmaf_rn(v, z01, v1 * z00);
+		const ValueT y1 = __fmaf_rn(v, z11, v1 * z10);
+
+		// Finally along X
+		return __fmaf_rn(u, y1, u1 * y0);
 	}
 
    private:
@@ -149,10 +180,15 @@ class IndexSampler<ValueT, 1> : public TrilinearSampler<ValueT> {
 	}
 
 	__hostdev__ ValueT operator()(const nanovdb::Coord& ijk) const {
+		// Fast path for cached position
+		if (ijk == mPos) return mValues[0][0][0];
+
+		// Avoid unnecessary memory access if not active
 		if (!BaseT::Acc().isDataActive(ijk)) {
 			return ValueT(0);
 		}
-		return (ijk == mPos) ? mValues[0][0][0] : BaseT::Acc()(ijk);
+
+		return BaseT::Acc()(ijk);
 	}
 
    private:

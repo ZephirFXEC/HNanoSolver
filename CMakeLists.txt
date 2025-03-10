@@ -1,115 +1,46 @@
-cmake_minimum_required(VERSION 3.29)
+cmake_minimum_required(VERSION 3.28)
+project(HNanoSolver LANGUAGES CXX CUDA VERSION 1.0.0)
+
+# Enforce C++17 standard
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Build configuration
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(BUILD_SHARED_LIBS ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-project(HNanoSolver LANGUAGES CXX CUDA)
+# Define build options
+option(HNS_BUILD_SOP "Build SOP components" ON)
+option(HNS_BUILD_TESTS "Build tests" OFF)
+option(HNS_BUILD_VIEWER "Build HNanoViewer" OFF)
 
-include(CTest)
-enable_testing()
+# Set default build type if not specified
+if (NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
+endif ()
 
-# ------- Find CUDA -----------
-find_package(CUDAToolkit REQUIRED)
-set(CUDA_ATTACH_VS_BUILD_RULE_TO_CUDA_FILE OFF)
+# Component builds
+if (HNS_BUILD_SOP)
+    add_subdirectory(src/SOP)
+endif ()
 
+if (HNS_BUILD_TESTS)
+    include(CTest)
+    enable_testing()
 
-# ------- Find Houdini --------
-# Points CMake to $HFS/toolkit/cmake
-list(APPEND CMAKE_PREFIX_PATH "$ENV{HFS}/toolkit/cmake")
-find_package(Houdini REQUIRED)
+    add_subdirectory(Tests)
 
-# Optionally create an interface library capturing Houdini & openvdb_sesi
-add_library(HoudiniVDB INTERFACE)
-target_link_libraries(HoudiniVDB INTERFACE Houdini "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib")
-target_include_directories(HoudiniVDB INTERFACE
-        $ENV{HFS}/toolkit/include
-)
-
-houdini_generate_proto_headers( FILES
-        src/SOP/HNanoSolver/SOP_HNanoSolver.cpp
-        src/SOP/Advection/SOP_VDBAdvect.cpp
-        src/SOP/ReadWrite/SOP_VDBFromGrid.cpp
-        src/SOP/VelocityAdvection/SOP_VDBAdvectVelocity.cpp
-        src/SOP/ProjectNonDivergent/SOP_VDBProjectNonDivergent.cpp
-)
-
-
-# Add subdirectories
-add_subdirectory(src/Cuda)
-add_subdirectory(src/Cuda/BrickMap)
-add_subdirectory(src/Tests)
-add_subdirectory(src/HNanoViewer)
-
-########################  Utils library ################################################################################
-
-add_library(Utils STATIC
-        src/Utils/Utils.cpp
-        src/Utils/ScopedTimer.hpp
-        src/Utils/GridBuilder.hpp
-        src/Utils/GridData.hpp
-        src/Utils/Memory.hpp
-        src/Utils/Utils.hpp
-        src/Utils/Stencils.hpp
-)
-target_link_libraries(Utils PRIVATE HoudiniVDB)
-
-target_include_directories(Utils PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_BINARY_DIR}
-)
-target_compile_features(Utils PUBLIC cxx_std_17)
-########################################################################################################################
-
-
-########################  SOP library ##################################################################################
-
-function(add_sop_library LIBNAME SRC_FILES)
-    add_library(${LIBNAME} SHARED ${SRC_FILES})
-    target_link_libraries(${LIBNAME} PRIVATE Utils Kernels HoudiniVDB BrickMap)
-    target_include_directories(${LIBNAME} PRIVATE
-            src
-            ${CMAKE_CURRENT_BINARY_DIR}
-            $ENV{HFS}/toolkit/include
+    add_custom_target(run_tests ALL
+            COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+            DEPENDS IndexGrid
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            COMMENT "Running unit tests after build..."
     )
-    target_compile_features(${LIBNAME} PUBLIC cxx_std_17)
-endfunction()
+endif ()
 
-add_sop_library(SOP_HNanoSolver
-        "src/SOP/HNanoSolver/SOP_HNanoSolver.cpp"
-        "src/SOP/HNanoSolver/SOP_HNanoSolver.hpp"
-)
-
-add_sop_library(SOP_Advect
-        "src/SOP/Advection/SOP_VDBAdvect.cpp"
-        "src/SOP/Advection/SOP_VDBAdvect.hpp"
-)
-
-add_sop_library(SOP_ProjectNonDivergent
-        "src/SOP/ProjectNonDivergent/SOP_VDBProjectNonDivergent.cpp"
-        "src/SOP/ProjectNonDivergent/SOP_VDBProjectNonDivergent.hpp"
-)
-
-add_sop_library(SOP_AdvectVelocity
-        "src/SOP/VelocityAdvection/SOP_VDBAdvectVelocity.cpp"
-        "src/SOP/VelocityAdvection/SOP_VDBAdvectVelocity.hpp"
-)
-
-add_sop_library(SOP_VDBFromGrid
-        "src/SOP/ReadWrite/SOP_VDBFromGrid.cpp"
-        "src/SOP/ReadWrite/SOP_VDBFromGrid.hpp"
-)
-
-########################################################################################################################
-
-houdini_configure_target(SOP_VDBFromGrid $ENV{DSO_Path})
-houdini_configure_target(SOP_HNanoSolver $ENV{DSO_Path})
-houdini_configure_target(SOP_Advect $ENV{DSO_Path})
-houdini_configure_target(SOP_AdvectVelocity $ENV{DSO_Path})
-houdini_configure_target(SOP_ProjectNonDivergent $ENV{DSO_Path})
-
-add_custom_target(run_tests ALL
-        COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure
-        DEPENDS IndexGrid
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        COMMENT "Running unit tests after build..."
-)
+if (HNS_BUILD_VIEWER)
+    add_subdirectory(HNanoViewer)
+endif ()

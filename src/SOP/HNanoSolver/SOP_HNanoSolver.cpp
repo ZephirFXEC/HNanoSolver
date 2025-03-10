@@ -3,13 +3,14 @@
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimVDB.h>
 #include <UT/UT_DSOVersion.h>
-#include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/cuda/DeviceBuffer.h>
 #include <openvdb/tools/Composite.h>
 #include <openvdb/tools/VolumeAdvect.h>
 
-#include "Utils/GridBuilder.hpp"
-#include "Utils/ScopedTimer.hpp"
-#include "Utils/Utils.hpp"
+#include "../Utils/GridBuilder.hpp"
+#include "../Utils/ScopedTimer.hpp"
+#include "../Utils/Utils.hpp"
+#include "nanovdb/tools/CreateNanoGrid.h"
 
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanosolver", "HNanoSolver", SOP_HNanoSolver::myConstructor, SOP_HNanoSolver::buildTemplates(), 2,
@@ -78,10 +79,12 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 
 	if (auto err = loadGrid(feedback_input, feedback_grids); err != UT_ERROR_NONE) {
 		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load density grid");
+		return;
 	}
 
 	if (auto err = loadGrid(source_input, source_grids); err != UT_ERROR_NONE) {
 		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load density grid");
+		return;
 	}
 
 	std::vector<openvdb::FloatGrid::Ptr> feedback_float_grids;
@@ -130,35 +133,56 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 	openvdb::FloatGrid::Ptr Domain = openvdb::FloatGrid::create();
 	{
 		ScopedTimer timer("Merging topology");
-		if (feedback_vector_grids.empty()) {
+		if (!feedback_vector_grids.empty()) {
+			Domain->topologyUnion(*feedback_vector_grids[0]);
+		} else {
 			for (const auto& grid : feedback_float_grids) {
 				Domain->topologyUnion(*grid);
 			}
-		} else {
-			Domain->topologyUnion(*feedback_vector_grids[0]);
 		}
-
-		Domain->tree().voxelizeActiveTiles();
 	}
 
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(Domain, &data);
+	builder.setAllocType(AllocationType::Standard);
+	{
+		for (const auto& grid : feedback_float_grids) {
+			builder.addGrid(grid, grid->getName());
+		}
 
-	for (const auto& grid : feedback_float_grids) {
-	    builder.addGrid(grid, grid->getName());
+		for (const auto& grid : feedback_vector_grids) {
+			builder.addGrid(grid, grid->getName());
+		}
+
+		builder.build();
 	}
 
-	for (const auto& grid : feedback_vector_grids) {
-	    builder.addGrid(grid, grid->getName());
+	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle;
+	{
+		ScopedTimer timer("Building Index Grid");
+		CreateIndexGrid(data, handle, feedback_vector_grids[0]->voxelSize()[0]);
 	}
 
-	builder.build();
+	cudaStream_t stream;
+	cudaStreamCreate(&stream);
+
+	{
+		ScopedTimer timer_kernel("Kernel");
+		const float deltaTime = static_cast<float>(sopparms.getTimestep());
+		const int iterations = sopparms.getIterations();
+		Compute_Sim(data, handle, iterations, deltaTime, feedback_vector_grids[0]->voxelSize()[0], stream);
+	}
 
 
 	{
 		for (const auto& grid : feedback_float_grids) {
 			auto out = builder.writeIndexGrid<openvdb::FloatGrid>(grid->getName(), grid->voxelSize()[0]);
+			GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
+		}
+
+		for (const auto& grid : feedback_vector_grids) {
+			auto out = builder.writeIndexGrid<openvdb::VectorGrid>(grid->getName(), grid->voxelSize()[0]);
 			GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
 		}
 	}
