@@ -10,7 +10,7 @@
 
 #include <string>
 
-#include "Utils/GridData.hpp"
+#include "../../Utils/GridData.hpp"
 
 class OpenVDBLoader {
    public:

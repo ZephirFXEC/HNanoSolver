@@ -68,6 +68,12 @@ BrickMap::BrickMap(const Dim dim) : m_dimensions(dim), m_pool(new BrickPool(dim[
 
 	// Allocate memory for d_emptyBricks to use in deallocateInactive()
 	CHECK_CUDA(cudaMalloc(&d_emptyBricks, sizeof(EmptyBrickInfo) * gridSize));
+
+	// Allocate persistent device buffer for BrickCoord array.
+	CHECK_CUDA(cudaMalloc(&d_activeCoordsBuffer, sizeof(BrickCoord) * gridSize));
+
+	// Allocate persistent device counter.
+	CHECK_CUDA(cudaMalloc(&d_activeCount, sizeof(uint32_t)));
 }
 
 BrickMap::~BrickMap() {
@@ -75,6 +81,8 @@ BrickMap::~BrickMap() {
 	if (d_allocationRequests) cudaFree(d_allocationRequests);
 	if (d_requestCounter) cudaFree(d_requestCounter);
 	if (d_emptyBricks) cudaFree(d_emptyBricks);
+	if (d_activeCoordsBuffer) cudaFree(d_activeCoordsBuffer);
+	if (d_activeCount) cudaFree(d_activeCount);
 	delete m_pool;
 }
 
@@ -299,21 +307,21 @@ __global__ void gatherActiveBricksKernel(const uint32_t* d_grid, const Brick* d_
 	if (idx >= total) return;
 
 	// Read the brick index
-	uint32_t brickIdx = d_grid[idx];
+	const uint32_t brickIdx = d_grid[idx];
 	if (brickIdx == BrickConfig::INACTIVE) {
 		return;  // skip
 	}
 
 	// Check if brick is loaded
-	const Brick& b = d_bricks[brickIdx];
-	if (!b.isLoaded) {
+	const auto& [data, isLoaded] = d_bricks[brickIdx];
+	if (!isLoaded) {
 		return;  // skip
 	}
 
 	const BrickCoord coord = BrickMath::getBrickGridIdxToCoord(idx, dim);
 
 	// We found an active brick => claim a slot
-	uint32_t outPos = atomicAdd(outCount, 1);
+	const uint32_t outPos = atomicAdd(outCount, 1);
 	outCoords[outPos] = coord;
 }
 
@@ -321,30 +329,22 @@ __global__ void gatherActiveBricksKernel(const uint32_t* d_grid, const Brick* d_
 std::vector<BrickCoord> BrickMap::getActiveBricks() const {
 	uint32_t maxPossibleBricks = m_dimensions[0] * m_dimensions[1] * m_dimensions[2];
 
-	// Allocate array of BrickCoord3D
-	BrickCoord* d_activeCoords = nullptr;
-	CHECK_CUDA(cudaMalloc(&d_activeCoords, maxPossibleBricks * sizeof(BrickCoord)));
+	// Reset the counter on device.
+	CHECK_CUDA(cudaMemset(d_activeCount, 0, sizeof(uint32_t)));
 
-	// Allocate a counter on device
-	uint32_t* d_count = nullptr;
-	CHECK_CUDA(cudaMalloc(&d_count, sizeof(uint32_t)));
-	CHECK_CUDA(cudaMemset(d_count, 0, sizeof(uint32_t)));
-
-
-	uint32_t blockSize = 256;
+	uint32_t blockSize = 128;
 	uint32_t gridSize = (maxPossibleBricks + blockSize - 1) / blockSize;
 
-	gatherActiveBricksKernel<<<gridSize, blockSize>>>(d_grid, m_pool->getDeviceBricks(), m_dimensions, d_activeCoords, d_count);
+	// Launch kernel using persistent buffers.
+	gatherActiveBricksKernel<<<gridSize, blockSize>>>(d_grid, m_pool->getDeviceBricks(), m_dimensions, d_activeCoordsBuffer, d_activeCount);
 
+	// Copy the count of active bricks back.
 	uint32_t activeCount = 0;
-	CHECK_CUDA(cudaMemcpy(&activeCount, d_count, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+	CHECK_CUDA(cudaMemcpy(&activeCount, d_activeCount, sizeof(uint32_t), cudaMemcpyDeviceToHost));
 
+	// Allocate host storage and copy only the active brick coordinates.
 	std::vector<BrickCoord> hostActiveCoords(activeCount);
-
-	CHECK_CUDA(cudaMemcpy(hostActiveCoords.data(), d_activeCoords, activeCount * sizeof(BrickCoord), cudaMemcpyDeviceToHost));
-
-	cudaFree(d_activeCoords);
-	cudaFree(d_count);
+	CHECK_CUDA(cudaMemcpy(hostActiveCoords.data(), d_activeCoordsBuffer, activeCount * sizeof(BrickCoord), cudaMemcpyDeviceToHost));
 
 	return hostActiveCoords;
 }
@@ -418,7 +418,7 @@ __global__ void accessBrickKernel(const uint32_t* grid, const Brick* bricks, con
 	for (uint32_t voxelIdx = 0; voxelIdx < Brick::VOLUME; voxelIdx++) {
 		Voxel& voxel = brickData[voxelIdx];
 		voxel.density = 1;
-		voxel.velocity = nanovdb::Vec3f(1, 0, 0);
+		voxel.velocity = nanovdb::Vec3f(1, 1, 0);
 	}
 }
 
@@ -436,50 +436,80 @@ __global__ void initVel(const uint32_t* grid, const Brick* bricks, const uint32_
 
 	for (uint32_t voxelIdx = 0; voxelIdx < Brick::VOLUME; voxelIdx++) {
 		Voxel& voxel = brickData[voxelIdx];
-		voxel.velocity = nanovdb::Vec3f(1, 0, 0);
+		voxel.velocity = nanovdb::Vec3f(1, 1, 0);
 	}
 }
 
 
-__global__ void advectAllocate(uint32_t* grid, const Brick* bricks, const float dt, const Dim dim, AllocationRequest* request,
-                               RequestCounter* counter) {
+__global__ void allocateNeighbours(uint32_t* grid, const Brick* bricks, const Dim dim, AllocationRequest* request,
+                                   RequestCounter* counter) {
+	// Compute the overall grid size.
+	const uint32_t gridSize = dim[0] * dim[1] * dim[2];
 	const uint32_t brickGridIdx = blockIdx.x * blockDim.x + threadIdx.x;
-	if (brickGridIdx >= dim[0] * dim[1] * dim[2]) return;
+	if (brickGridIdx >= gridSize) return;
 
+	// Get the brick index at this grid cell.
 	const uint32_t brickIdx = grid[brickGridIdx];
 	if (brickIdx == BrickConfig::INACTIVE) return;
 
 	const Brick& brick = bricks[brickIdx];
 	if (!brick.isLoaded) return;
 
-	const BrickCoord brickCoord = BrickMath::getBrickGridIdxToCoord(brickGridIdx, dim);
+	// Check if the current brick contains any nonzero density.
 	const Voxel* brickData = brick.data;
-
-
+	bool containsDensity = false;
 	for (uint32_t voxelIdx = 0; voxelIdx < Brick::VOLUME; ++voxelIdx) {
-		const Voxel& currentVoxel = brickData[voxelIdx];
-		// Skip voxels with zero density
-		if (currentVoxel.density == 0.0f) continue;
+		if (brickData[voxelIdx].density > 0.001f) {
+			containsDensity = true;
+			break;
+		}
+	}
+	if (!containsDensity) return;
 
-		const VoxelCoordLocal localCoord = BrickMath::voxelIdxToLocal(voxelIdx);
-		const VoxelCoordGlobal globalCoord = BrickMath::localToGlobalCoord(brickCoord, localCoord);
+	// The brick contains density; prepare to allocate all neighbors.
+	// Use a small local cache to avoid duplicate allocation requests per thread.
+	constexpr int maxCacheSize = 32;
+	uint32_t neighborCache[maxCacheSize];
+	int cacheCount = 0;
 
-		const nanovdb::Vec3f velocity = currentVoxel.velocity;
+	// Convert the grid index into the brick coordinate.
+	const BrickCoord brickCoord = BrickMath::getBrickGridIdxToCoord(brickGridIdx, dim);
 
-		const VoxelCoordGlobal destGlobal(globalCoord[0] + velocity[0] * dt, globalCoord[1] + velocity[1] * dt,
-		                                  globalCoord[2] + velocity[2] * dt);
+	// Loop over the 3x3x3 neighborhood (excluding the center).
+	for (int dz = -1; dz <= 1; dz++) {
+		for (int dy = -1; dy <= 1; dy++) {
+			for (int dx = -1; dx <= 1; dx++) {
+				if (dx == 0 && dy == 0 && dz == 0) continue;  // skip self
 
-		const BrickCoord destBrick = BrickMath::getBrickCoord(destGlobal);
-		const uint32_t destGridIdx = BrickMath::getBrickIndex(destBrick, dim);
+				// Compute neighbor brick coordinate.
+				BrickCoord neighborCoord = {static_cast<uint8_t>(brickCoord[0] + dx), static_cast<uint8_t>(brickCoord[1] + dy),
+				                            static_cast<uint8_t>(brickCoord[2] + dz)};
 
-		if (destGridIdx >= dim[0] * dim[1] * dim[2]) continue;
+				// Validate neighbor coordinate.
+				if (!BrickMath::isValidBrickCoord(neighborCoord, dim)) continue;
+				const uint32_t neighborGridIdx = BrickMath::getBrickIndex(neighborCoord, dim);
 
-		const uint32_t destBrickIdx = grid[destGridIdx];
+				// Check cache: if already processed this neighbor for the current brick, skip.
+				bool alreadyCached = false;
+				for (int i = 0; i < cacheCount; ++i) {
+					if (neighborCache[i] == neighborGridIdx) {
+						alreadyCached = true;
+						break;
+					}
+				}
+				if (alreadyCached) continue;
 
-		if (destBrickIdx == BrickConfig::INACTIVE) {
-			const uint32_t oldVal = atomicCAS(&grid[destGridIdx], BrickConfig::INACTIVE, BrickConfig::ALLOC_PENDING);
-			if (oldVal == BrickConfig::INACTIVE) {
-				BrickMap::requestAllocation(destBrick, request, counter);
+				// Attempt to mark the neighbor cell as pending allocation.
+				const uint32_t oldVal = atomicCAS(&grid[neighborGridIdx], BrickConfig::INACTIVE, BrickConfig::ALLOC_PENDING);
+				if (oldVal == BrickConfig::INACTIVE) {
+					// Successful claim: request allocation.
+					BrickMap::requestAllocation(neighborCoord, request, counter);
+				}
+
+				// Cache the neighbor index.
+				if (cacheCount < maxCacheSize) {
+					neighborCache[cacheCount++] = neighborGridIdx;
+				}
 			}
 		}
 	}
@@ -538,7 +568,7 @@ extern "C" void advect(const BrickMap& brickMap, const float dt) {
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
 
-	advectAllocate<<<gridSize, blockSize, 0, stream>>>(d_grid, d_bricks, dt, dim, d_requests, d_counter);
+	allocateNeighbours<<<gridSize, blockSize, 0, stream>>>(d_grid, d_bricks, dim, d_requests, d_counter);
 
 	CHECK_CUDA(cudaStreamSynchronize(stream));
 

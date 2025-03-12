@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <nanovdb/math/Math.h>
-#include <nanovdb/util/cuda/Util.h>
+#include "nanovdb/math/Math.h"
+#include "nanovdb/util/cuda/Util.h"
 
 #include <iostream>
 #include <vector>
@@ -185,6 +185,10 @@ class BrickMap {
 	AllocationRequest* d_allocationRequests = nullptr;
 	RequestCounter* d_requestCounter = nullptr;
 	EmptyBrickInfo* d_emptyBricks = nullptr;
+
+	// Persistent buffers for gathering active bricks.
+	mutable BrickCoord* d_activeCoordsBuffer;
+	mutable uint32_t* d_activeCount;
 };
 
 

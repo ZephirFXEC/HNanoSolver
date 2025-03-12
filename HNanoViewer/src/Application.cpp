@@ -16,15 +16,13 @@
 // Your own headers
 #include "OpenVDBLoader.hpp"
 #include "Shader.hpp"
-#include "Utils/GridBuilder.hpp"
+#include "../../Utils/GridBuilder.hpp"
 
 
 
 extern "C" {
 	extern "C" void accessBrick(const BrickMap& brickMap);
 	extern "C" void advect(const BrickMap& brickMap, float dt);
-	void Create(VolumeTexture* volumeTexture, const BrickMap* brickMap);
-	void Update(VolumeTexture* volumeTexture, const BrickMap* brickMap);
 }
 // -------------------------------------------------------------
 // Constructor & Destructor
@@ -49,7 +47,7 @@ Application::Application()
       vdbLoaded_(false),
       vdbFilename_("C:/Users/zphrfx/Desktop/bunny_cloud.vdb") {}
 
-BrickMap brickMap(Dim(8, 8, 8));
+BrickMap brickMap(Dim(16, 16, 16));
 std::vector<std::pair<nanovdb::Coord, nanovdb::Coord>> bboxes;
 std::vector<std::pair<nanovdb::Coord, float>> coordValue;
 
@@ -107,12 +105,11 @@ bool Application::init() {
 	// Initialize your components
 	renderer_ = new Renderer();
 	renderer_->init();
-	shader_ = new Shader("C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/vertex_shader.vert",
-	                     "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/fragment_shader.frag");
-	wireframe_ = new Shader("C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/vertex_shader.vert",
-	                        "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/src/HNanoViewer/shaders/wireframe.frag");
+	shader_ = new Shader("C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/HNanoViewer/shaders/vertex_shader.vert",
+	                     "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/HNanoViewer/shaders/fragment_shader.frag");
+	wireframe_ = new Shader("C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/HNanoViewer/shaders/vertex_shader.vert",
+	                        "C:/Users/zphrfx/Desktop/hdk/hdk_clion/HNanoSolver/HNanoViewer/shaders/wireframe.frag");
 
-	//Create(&volumeTex_, &brickMap);
 
 	return true;
 }
@@ -161,8 +158,6 @@ void Application::update() {
 		nanovdb::Coord max = {brick[0] + 1, brick[1] + 1, brick[2] + 1};
 		bboxes.emplace_back(min, max);
 	}
-
-	//Update(&volumeTex_, &brickMap);
 }
 
 // -------------------------------------------------------------
@@ -202,9 +197,10 @@ void Application::render() {
 		renderer_->drawBoundingBox(*wireframe_, min, max, view, projection, glm::mat4(1.0f));
 	}
 
-	/*
+
 	shader_->use();
 
+	/*
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_3D, volumeTex_.texture());
 
@@ -231,12 +227,12 @@ int Application::run() {
 		printf("Failed to allocate brick\n");
 	}
 
+	brickMap.allocateBrickAt({0, 1, 0});
+
 	{
 		ScopedTimer timer("BrickMap::KernelAccess");
 		accessBrick(brickMap);
 	}
-
-	cudaDeviceSynchronize();
 
 	// Main loop
 	while (!glfwWindowShouldClose(window_)) {

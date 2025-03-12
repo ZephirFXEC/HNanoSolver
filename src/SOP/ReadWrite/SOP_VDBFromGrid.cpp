@@ -11,10 +11,10 @@
 #include <UT/UT_DSOVersion.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 
-#include "Cuda/BrickMap/BrickMap.cuh"
-#include "Utils/GridBuilder.hpp"
-#include "Utils/ScopedTimer.hpp"
-#include "Utils/Utils.hpp"
+#include "../Utils/GridBuilder.hpp"
+#include "../Utils/ScopedTimer.hpp"
+#include "../Utils/Utils.hpp"
+#include "BrickMap/BrickMap.cuh"
 
 extern "C" void launch_kernels(HNS::GridIndexedData& data, float dt, float voxelSize, cudaStream_t stream);
 extern "C" void gpu_index_grid(HNS::GridIndexedData& data, float voxelSize, const cudaStream_t& stream);
@@ -102,7 +102,6 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 		}
 
 		InitVel(brickMap);
-
 	}
 
 
@@ -126,17 +125,17 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 	//   'sopcache->brickMap.getBrickAtHost(coord)' returns a pointer to 32^3 voxels.
 	//   Each 'Voxel' struct contains at least a 'float density' field.
 
+	// Create a brand-new FloatGrid for this brick
+	openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create(/*background*/ 0.0f);
+	// Give each grid a unique name, e.g. "density_0", "density_1", ...
+	out->setName("density");
+	auto acc = out->getAccessor();
+
 	for (size_t b = 0; b < brickCoord.size(); ++b) {
 		const BrickCoord& coord = brickCoord[b];
 
-		// Create a brand-new FloatGrid for this brick
-		openvdb::FloatGrid::Ptr out = openvdb::FloatGrid::create(/*background*/ 0.0f);
-		// Give each grid a unique name, e.g. "density_0", "density_1", ...
-		out->setName("density_" + std::to_string(b));
 
 		// Get the accessor for writing voxel values
-		auto acc = out->getAccessor();
-
 		// Retrieve the brick (32^3 voxels) from the BrickMap
 		const Voxel* brick = brickMap.getBrickAtHost(coord);
 		if (!brick) continue;  // Safety check if it might be null
@@ -152,8 +151,8 @@ void SOP_HNanoVDBFromGridVerb::cook(const CookParms& cookparms) const {
 			// Write the density
 			acc.setValue(world, brick[i].density);
 		}
-
-		// Build a GU_PrimVDB (Volume primitive) for display from this grid
-		GU_PrimVDB::buildFromGrid(*detail, out, /*transform*/ nullptr, out->getName().c_str());
 	}
+
+	// Build a GU_PrimVDB (Volume primitive) for display from this grid
+	GU_PrimVDB::buildFromGrid(*detail, out, /*transform*/ nullptr, out->getName().c_str());
 }

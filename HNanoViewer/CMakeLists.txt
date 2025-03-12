@@ -6,9 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 project(HNanoViewer LANGUAGES CXX CUDA)
 
 # Find packages
+find_package(CUDAToolkit REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+
+include_directories(../externals)
 
 add_executable(HNanoViewer
         src/HNanoViewer.cpp
@@ -21,7 +24,7 @@ add_executable(HNanoViewer
         src/Application.cpp
         src/Application.hpp)
 
-add_subdirectory(Cuda)
+add_subdirectory(../src/Cuda/BrickMap BrickMap)
 
 target_link_libraries(HNanoViewer PRIVATE
         glad::glad
@@ -29,6 +32,4 @@ target_link_libraries(HNanoViewer PRIVATE
         imgui::imgui
         BrickMap
         Utils
-        HoudiniVDB
-        Kernels
-        HNanoViewerCuda)
+        HoudiniVDB)

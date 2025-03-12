@@ -1,6 +1,6 @@
 #pragma once
 
-#include <BrickMap.cuh>
+#include "BrickMap.cuh"
 
 // Only define __hostdev__ when compiling as NVIDIA CUDA
 #if defined(__CUDACC__) || defined(__HIP__)
@@ -10,7 +10,7 @@
 #define __hostdev__
 #endif
 
-#include <nanovdb/math/Math.h>
+#include "nanovdb/math/Math.h"
 
 
 template <template <typename> class Vec3T>
@@ -44,6 +44,63 @@ __device__ inline Voxel sampleVoxel(const uint32_t* grid, const Brick* bricks, c
 	return brickData[voxelIdx];
 }
 
+__device__ Voxel trilinearInterpolate(float wx, float wy, float wz, const Voxel& v000, const Voxel& v001, const Voxel& v010,
+                                      const Voxel& v011, const Voxel& v100, const Voxel& v101, const Voxel& v110, const Voxel& v111) {
+	Voxel result;
+	const float omwx = 1.0f - wx;
+	const float omwy = 1.0f - wy;
+	const float omwz = 1.0f - wz;
+
+	// Precompute weights.
+	const float w000 = omwx * omwy * omwz;
+	const float w001 = omwx * omwy * wz;
+	const float w010 = omwx * wy * omwz;
+	const float w011 = omwx * wy * wz;
+	const float w100 = wx * omwy * omwz;
+	const float w101 = wx * omwy * wz;
+	const float w110 = wx * wy * omwz;
+	const float w111 = wx * wy * wz;
+
+	// Use nested __fmaf_rn calls to accumulate density.
+	result.density = __fmaf_rn(
+	    w111, v111.density,
+	    __fmaf_rn(w110, v110.density,
+	              __fmaf_rn(w101, v101.density,
+	                        __fmaf_rn(w100, v100.density,
+	                                  __fmaf_rn(w011, v011.density,
+	                                            __fmaf_rn(w010, v010.density, __fmaf_rn(w001, v001.density, w000 * v000.density)))))));
+
+	// Compute velocity per component.
+	result.velocity[0] =
+	    __fmaf_rn(w111, v111.velocity[0],
+	              __fmaf_rn(w110, v110.velocity[0],
+	                        __fmaf_rn(w101, v101.velocity[0],
+	                                  __fmaf_rn(w100, v100.velocity[0],
+	                                            __fmaf_rn(w011, v011.velocity[0],
+	                                                      __fmaf_rn(w010, v010.velocity[0],
+	                                                                __fmaf_rn(w001, v001.velocity[0], w000 * v000.velocity[0])))))));
+
+	result.velocity[1] =
+	    __fmaf_rn(w111, v111.velocity[1],
+	              __fmaf_rn(w110, v110.velocity[1],
+	                        __fmaf_rn(w101, v101.velocity[1],
+	                                  __fmaf_rn(w100, v100.velocity[1],
+	                                            __fmaf_rn(w011, v011.velocity[1],
+	                                                      __fmaf_rn(w010, v010.velocity[1],
+	                                                                __fmaf_rn(w001, v001.velocity[1], w000 * v000.velocity[1])))))));
+
+	result.velocity[2] =
+	    __fmaf_rn(w111, v111.velocity[2],
+	              __fmaf_rn(w110, v110.velocity[2],
+	                        __fmaf_rn(w101, v101.velocity[2],
+	                                  __fmaf_rn(w100, v100.velocity[2],
+	                                            __fmaf_rn(w011, v011.velocity[2],
+	                                                      __fmaf_rn(w010, v010.velocity[2],
+	                                                                __fmaf_rn(w001, v001.velocity[2], w000 * v000.velocity[2])))))));
+
+	return result;
+}
+
 
 __device__ inline Voxel trilinearSample(const uint32_t* grid, const Brick* bricks, const Dim dim, const nanovdb::Vec3f xyz) {
 	const int x0 = __float2int_rd(xyz[0]), x1 = x0 + 1;
@@ -65,20 +122,7 @@ __device__ inline Voxel trilinearSample(const uint32_t* grid, const Brick* brick
 	const Voxel& v110 = sampleVoxel(grid, bricks, dim, VoxelCoordGlobal(x1, y1, z0));
 	const Voxel& v111 = sampleVoxel(grid, bricks, dim, VoxelCoordGlobal(x1, y1, z1));
 
-	// Interpolate density
-	Voxel result;
-	result.density = (1.0f - wx) * (1.0f - wy) * (1.0f - wz) * v000.density + (1.0f - wx) * (1.0f - wy) * wz * v001.density +
-	                 (1.0f - wx) * wy * (1.0f - wz) * v010.density + (1.0f - wx) * wy * wz * v011.density +
-	                 wx * (1.0f - wy) * (1.0f - wz) * v100.density + wx * (1.0f - wy) * wz * v101.density +
-	                 wx * wy * (1.0f - wz) * v110.density + wx * wy * wz * v111.density;
-
-	result.velocity = (1.0f - wx) * (1.0f - wy) * (1.0f - wz) * v000.velocity + (1.0f - wx) * (1.0f - wy) * wz * v001.velocity +
-	                  (1.0f - wx) * wy * (1.0f - wz) * v010.velocity + (1.0f - wx) * wy * wz * v011.velocity +
-	                  wx * (1.0f - wy) * (1.0f - wz) * v100.velocity + wx * (1.0f - wy) * wz * v101.velocity +
-	                  wx * wy * (1.0f - wz) * v110.velocity + wx * wy * wz * v111.velocity;
-
-	// You might want to interpolate other Voxel properties similarly
-	return result;
+	return trilinearInterpolate(wx, wy, wz, v000, v001, v010, v011, v100, v101, v110, v111);
 }
 
 /*

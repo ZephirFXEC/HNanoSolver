@@ -1,8 +1,7 @@
 enable_language(CUDA)
 
 include_directories("$ENV{HFS}/toolkit/include")
-
-list(APPEND CUDA_NVCC_FLAGS "-gencode=arch=compute_20,code=compute_20")
+include_directories(../../externals)
 
 add_library(BrickMap STATIC
         BrickMap.cuh

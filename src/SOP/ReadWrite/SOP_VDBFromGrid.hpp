@@ -17,7 +17,7 @@ class BrickMapSingleton {
    public:
 	BrickMapSingleton() : brickMap(nullptr) {
 		if (!brickMap) {
-			brickMap = new BrickMap(Dim(32, 32, 32));
+			brickMap = new BrickMap(Dim(16, 16, 16));
 		}
 	}
 
@@ -66,7 +66,7 @@ class SOP_HNanoVDBFromGrid final : public SOP_Node {
 
 class SOP_HNanoVDBFromGridCache final : public SOP_NodeCache {
    public:
-	SOP_HNanoVDBFromGridCache() : SOP_NodeCache(), brickMapSingleton() {}
+	SOP_HNanoVDBFromGridCache() : SOP_NodeCache() {}
 
 
 	~SOP_HNanoVDBFromGridCache() override = default;

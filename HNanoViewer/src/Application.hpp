@@ -2,7 +2,6 @@
 #pragma once
 
 #include "BrickMap.cuh"
-#include "VolumeTex.cuh"
 
 #include <GLFW/glfw3.h>
 
@@ -35,7 +34,6 @@ class Application {
 
 	// GLFW window and context
 	GLFWwindow* window_;
-	VolumeTexture volumeTex_;
 
 	// Camera state
 	glm::vec3 cameraPos_;

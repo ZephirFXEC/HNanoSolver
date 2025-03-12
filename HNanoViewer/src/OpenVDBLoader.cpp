@@ -6,7 +6,7 @@
 
 #include <nanovdb/math/Math.h>
 
-#include <Utils/GridBuilder.hpp>
+#include "../../Utils/GridBuilder.hpp"
 #include <iostream>
 
 
