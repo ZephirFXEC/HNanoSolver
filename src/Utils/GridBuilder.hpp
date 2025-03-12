@@ -58,87 +58,6 @@ class IndexGridBuilder {
 		m_outData->addValueBlock<openvdb::Vec3f>(name, m_totalVoxels);
 	}
 
-
-	/*void build() {
-	    ScopedTimer timer("IndexGridBuilder::build");
-
-	    using TreeType = typename DomainGridT::TreeType;
-	    const TreeType& domainTree  = m_domainGrid->tree();
-	    const openvdb::tree::LeafManager<const TreeType> leafManager(domainTree );
-
-	    tbb::parallel_for(tbb::blocked_range<size_t>(0, m_numLeaves), [&](const tbb::blocked_range<size_t>& range) {
-	        for (size_t i = range.begin(); i != range.end(); ++i) {
-	            const auto& leaf = leafManager.leaf(i);
-	            const size_t leafBaseOffset = m_leafOffsets[i];
-	            size_t localIdx = 0;
-	            for (auto iter = leaf.cbeginValueOn(); iter.test(); ++iter) {
-	                const size_t outIdx = leafBaseOffset + localIdx;
-	                m_outData->pIndexes()[outIdx] = outIdx;
-	                m_outData->pCoords()[outIdx] = iter.getCoord();
-	                ++localIdx;
-	            }
-	        }
-	    });
-
-	    // ─── PHASE 2: FOR EACH ADDED GRID, COPY VALUES USING RAW LEAF DATA ─────
-	    // Process float grids:
-	    for (auto& [name, grid] : m_float_grids) {
-	        const auto& tree = grid->tree();
-	        openvdb::tree::LeafManager<const openvdb::FloatGrid::TreeType> treeLeafManager(tree);
-	        float* outPtr = m_outData->pValues<float>(name);
-
-	        tbb::parallel_for(tbb::blocked_range<size_t>(0, m_numLeaves), [&](const tbb::blocked_range<size_t>& range) {
-	            for (size_t i = range.begin(); i != range.end(); ++i) {
-	                const auto& domainLeaf = leafManager.leaf(i);
-	                const size_t leafBaseOffset = m_leafOffsets[i];
-
-	                if (auto floatLeaf = tree.probeConstLeaf(domainLeaf.origin())) {
-	                    if (floatLeaf->onVoxelCount() == TreeType::LeafNodeType::SIZE) {
-	                        std::memcpy(outPtr + leafBaseOffset, floatLeaf->buffer().data(), TreeType::LeafNodeType::SIZE * sizeof(float));
-	                    } else {
-	                        size_t localIdx = 0;
-	                        for (auto iter = domainLeaf.cbeginValueOn(); iter.test(); ++iter) {
-	                            const openvdb::Coord& c = iter.getCoord();
-	                            outPtr[leafBaseOffset + localIdx] = floatLeaf->getValue(c);
-	                            ++localIdx;
-	                        }
-	                    }
-	                }
-	            }
-	        });
-	    }
-
-
-	    // Process Vector grids:
-	    for (auto& [name, grid] : m_vector_grids) {
-	        const auto& tree = grid->tree();
-	        openvdb::tree::LeafManager<const openvdb::VectorGrid::TreeType> treeLeafManager(tree);
-	        openvdb::Vec3f* outPtr = m_outData->pValues<openvdb::Vec3f>(name);
-
-	        tbb::parallel_for(tbb::blocked_range<size_t>(0, m_numLeaves), [&](const tbb::blocked_range<size_t>& range) {
-	            for (size_t i = range.begin(); i != range.end(); ++i) {
-	                const auto& domainLeaf = leafManager.leaf(i);
-	                const size_t leafBaseOffset = m_leafOffsets[i];
-
-	                if (auto vectorleaf = tree.probeConstLeaf(domainLeaf.origin())) {
-	                    if (vectorleaf->onVoxelCount() == TreeType::LeafNodeType::SIZE) {
-	                        std::memcpy(outPtr + leafBaseOffset, vectorleaf->buffer().data(),
-	                                    TreeType::LeafNodeType::SIZE * sizeof(openvdb::Vec3f));
-	                    } else {
-	                        size_t localIdx = 0;
-	                        for (auto iter = domainLeaf.cbeginValueOn(); iter.test(); ++iter) {
-	                            const openvdb::Coord& c = iter.getCoord();
-	                            outPtr[leafBaseOffset + localIdx] = vectorleaf->getValue(c);
-	                            ++localIdx;
-	                        }
-	                    }
-	                }
-	            }
-	        });
-	    }
-	}
-	*/
-
 	void build() {
 		ScopedTimer timer("IndexGridBuilder::Build");
 
@@ -164,7 +83,7 @@ class IndexGridBuilder {
 				const auto& leaf = leafManager.leaf(i);
 				const size_t leafBaseOffset = m_leafOffsets[i];
 				size_t localIdx = 0;
-
+				
 				for (auto iter = leaf.cbeginValueOn(); iter.test(); ++iter) {
 					const size_t outIdx = leafBaseOffset + localIdx;
 
@@ -234,8 +153,6 @@ class IndexGridBuilder {
 			}
 		});
 
-		//openvdb::tools::deactivate(grid->tree(), ValueT(0), ValueT(0), true);
-		//openvdb::tools::pruneInactive(grid->tree());
 		return grid;
 	}
 
@@ -247,43 +164,14 @@ class IndexGridBuilder {
 		using TreeType = typename DomainGridT::TreeType;
 		const TreeType& tree = m_domainGrid->tree();
 		const openvdb::tree::LeafManager<const TreeType> leafManager(tree);
-		m_numLeaves = leafManager.leafCount();
 
-		m_leafVoxelCounts.resize(m_numLeaves);
-		m_leafOffsets.resize(m_numLeaves + 1);
+		leafManager.getPrefixSum(m_leafOffsets, m_numLeaves);
 
-		m_totalVoxels = parallel_reduce(
-		    tbb::blocked_range<size_t>(0, m_numLeaves), static_cast<size_t>(0),
-		    [&](const tbb::blocked_range<size_t>& r, size_t init) {
-			    for (size_t i = r.begin(); i != r.end(); ++i) {
-				    const auto& leaf = leafManager.leaf(i);
-				    const size_t count = leaf.onVoxelCount();
-				    m_leafVoxelCounts[i] = count;
-				    init += count;
-			    }
-			    return init;
-		    },
-		    std::plus<>());
-
-		parallel_scan(
-		    tbb::blocked_range<size_t>(0, m_numLeaves), static_cast<size_t>(0),
-		    [&](const tbb::blocked_range<size_t>& r, size_t sum, const bool isFinal) -> size_t {
-			    for (size_t i = r.begin(); i != r.end(); ++i) {
-				    if (isFinal) {
-					    m_leafOffsets[i] = sum;
-				    }
-				    sum += m_leafVoxelCounts[i];
-			    }
-			    return sum;
-		    },
-		    std::plus<>());
-
-		m_leafOffsets[m_numLeaves] = m_totalVoxels;
+		m_totalVoxels = m_domainGrid->activeVoxelCount();
 	}
 
 	typename DomainGridT::ConstPtr m_domainGrid;
-	std::vector<size_t> m_leafVoxelCounts{};
-	std::vector<size_t> m_leafOffsets{};
+	size_t* m_leafOffsets{};
 	size_t m_totalVoxels = 0;
 	size_t m_numLeaves = 0;
 	GridIndexedData* m_outData;

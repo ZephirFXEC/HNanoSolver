@@ -6,17 +6,30 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 project(HNanoViewer LANGUAGES CXX CUDA)
 
 # Find packages
+find_package(CUDAToolkit REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 
-add_executable(HNanoViewer src/HNanoViewer.cpp src/OpenVDBLoader.hpp src/OpenVDBLoader.cpp src/Shader.hpp src/Shader.cpp src/Renderer.hpp src/Renderer.cpp)
+include_directories(../externals)
+
+add_executable(HNanoViewer
+        src/HNanoViewer.cpp
+        src/OpenVDBLoader.hpp
+        src/OpenVDBLoader.cpp
+        src/Shader.hpp
+        src/Shader.cpp
+        src/Renderer.hpp
+        src/Renderer.cpp
+        src/Application.cpp
+        src/Application.hpp)
+
+add_subdirectory(../src/Cuda/BrickMap BrickMap)
 
 target_link_libraries(HNanoViewer PRIVATE
         glad::glad
         glfw
         imgui::imgui
+        BrickMap
         Utils
-        Kernels
-        Houdini
-        "$ENV{HFS}/custom/houdini/dsolib/openvdb_sesi.lib")
+        HoudiniVDB)

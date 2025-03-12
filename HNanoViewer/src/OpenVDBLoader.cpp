@@ -4,7 +4,9 @@
 
 #include "OpenVDBLoader.hpp"
 
-#include <Utils/GridBuilder.hpp>
+#include <nanovdb/math/Math.h>
+
+#include "../../Utils/GridBuilder.hpp"
 #include <iostream>
 
 
@@ -41,13 +43,34 @@ bool OpenVDBLoader::loadVDB(const std::string& filename) {
 	return true;
 }
 
-bool OpenVDBLoader::VDBToTexture(GLuint& volumeTexture, const HNS::NanoFloatGrid & in_data) const {
+std::vector<std::pair<nanovdb::Coord, float>> OpenVDBLoader::getCoords() const {
+	const openvdb::FloatGrid::Ptr grid = openvdb::gridPtrCast<openvdb::FloatGrid>(pBaseGrid);
+	const auto accessor = grid->getAccessor();
+
+	std::vector<std::pair<nanovdb::Coord, float>> coords(grid->activeVoxelCount());
+	openvdb::Coord minbbox = grid->evalActiveVoxelBoundingBox().min();
+
+	for (auto iter = grid->tree().beginValueOn(); iter.test(); ++iter) {
+		const openvdb::Coord coord = iter.getCoord();
+		const float value = iter.getValue();
+
+		openvdb::Coord toplus = coord - minbbox;
+		nanovdb::Coord pCoords(toplus.x(), toplus.y(), toplus.z());
+
+		coords.emplace_back(pCoords, value);
+	}
+
+	return coords;
+}
+
+bool OpenVDBLoader::VDBToTexture(GLuint& volumeTexture, HNS::GridIndexedData* in_data, openvdb::math::BBox<openvdb::Vec3d>& bbox) const {
 	// Determine volume bounds and dimensions
 	const openvdb::FloatGrid::ConstPtr grid = openvdb::gridConstPtrCast<openvdb::FloatGrid>(pBaseGrid);
 
-	openvdb::math::CoordBBox bbox = grid->evalActiveVoxelBoundingBox();
-	openvdb::Coord minCoord = bbox.min();
-	openvdb::Coord maxCoord = bbox.max();
+	openvdb::math::CoordBBox box = grid->evalActiveVoxelBoundingBox();
+	openvdb::Coord minCoord = box.min();
+	openvdb::Coord maxCoord = box.max();
+	bbox = grid->transform().indexToWorld(box);
 
 	const int dimX = maxCoord.x() - minCoord.x() + 1;
 	const int dimY = maxCoord.y() - minCoord.y() + 1;
@@ -57,14 +80,17 @@ bool OpenVDBLoader::VDBToTexture(GLuint& volumeTexture, const HNS::NanoFloatGrid
 	// Pre-allocate with zero initialization
 	std::vector volumeData(dimX * dimY * dimZ, 0.0f);
 
+	const auto* pCoords = in_data->pCoords();
+	const auto* pValues = in_data->pValues<float>("density");
+
 	// Use direct iteration over coordinates with pre-computed index calculation
-	for (size_t i = 0; i < in_data.size; ++i) {
-		const nanovdb::Coord& coord = in_data.pCoords()[i];
+	for (size_t i = 0; i < in_data->size(); ++i) {
+		const openvdb::Coord& coord = pCoords[i];
 		const int x = coord.x() - minCoord.x();
 		const int y = coord.y() - minCoord.y();
 		const int z = coord.z() - minCoord.z();
 
-		volumeData[x + y * dimX + z * dimX * dimY] = in_data.pValues()[i];
+		volumeData[x + y * dimX + z * dimX * dimY] = pValues[i];
 	}
 
 	// Create OpenGL 3D texture
