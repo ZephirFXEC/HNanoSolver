@@ -100,10 +100,7 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 		}
 	}
 
-	bool isSourced = true;
-	if (source_grids.empty()) {
-		isSourced = false;
-	}
+	bool isSourced = !source_grids.empty();
 
 	if (isSourced) {
 		for (const auto& grid : source_grids) {
@@ -168,7 +165,6 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 	cudaStreamCreate(&stream);
 
 	{
-		ScopedTimer timer_kernel("Kernel");
 		const float deltaTime = static_cast<float>(sopparms.getTimestep());
 		const int iterations = sopparms.getIterations();
 		Compute_Sim(data, handle, iterations, deltaTime, feedback_vector_grids[0]->voxelSize()[0], stream);

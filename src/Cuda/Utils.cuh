@@ -32,9 +32,9 @@ __device__ __forceinline__ nanovdb::Vec3f absValue(const nanovdb::Vec3f& v) {
 __device__ __forceinline__ float computeMaxCorrection(const float forward, const float original) {
 	return __fmul_rn(0.5f, fabsf(__fsub_rn(forward, original)));
 }
-__device__ __forceinline__ nanovdb::Vec3f computeMaxCorrection(const nanovdb::Vec3f& original, const nanovdb::Vec3f& backward) {
-	return nanovdb::Vec3f(computeMaxCorrection(original[0], backward[0]), computeMaxCorrection(original[1], backward[1]),
-	                      computeMaxCorrection(original[2], backward[2]));
+__device__ __forceinline__ nanovdb::Vec3f computeMaxCorrection(const nanovdb::Vec3f& forward, const nanovdb::Vec3f& original) {
+	return nanovdb::Vec3f(computeMaxCorrection(forward[0], original[0]), computeMaxCorrection(forward[1], original[1]),
+	                      computeMaxCorrection(forward[2], original[2]));
 }
 
 
@@ -52,8 +52,6 @@ __device__ __forceinline__ float lerp(const float a, const float b, const float 
 __device__ __forceinline__ nanovdb::Vec3f lerp(const nanovdb::Vec3f& a, const nanovdb::Vec3f& b, const float t) { return a + (b - a) * t; }
 
 __device__ __forceinline__ float enforceNonNegative(const float x) { return fmaxf(0.0f, x); }
-
-__device__ __forceinline__ nanovdb::Vec3f enforceNonNegative(const nanovdb::Vec3f& v) { return v; }
 
 
 inline __device__ nanovdb::Vec3f sampleMACVelocity(
@@ -86,20 +84,6 @@ inline __device__ nanovdb::Vec3f MACToFaceCentered_idx(const IndexSampler<nanovd
 	return {(up + um) / 2.0f, (vp + vm) / 2.0f, (wp + wm) / 2.0f};
 }
 
-inline __device__ nanovdb::Vec3f MACToFaceCentered(
-    const decltype(nanovdb::math::createSampler<1>(
-        std::declval<const decltype(std::declval<nanovdb::Vec3fGrid>().tree().getAccessor())>()))& velSampler,
-    const nanovdb::Vec3f& pos) {
-	const float up = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
-	const float vp = velSampler(pos + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
-	const float wp = velSampler(pos + nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
-
-	const float um = velSampler(pos - nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
-	const float vm = velSampler(pos - nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
-	const float wm = velSampler(pos - nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
-
-	return {(up + um) / 2.0f, (vp + vm) / 2.0f, (wp + wm) / 2.0f};
-}
 
 template <typename VelocitySampler>
 __device__ nanovdb::Vec3f rk4_integrate(const VelocitySampler& sampler, nanovdb::Vec3f start_pos, float h) {
@@ -127,3 +111,26 @@ __device__ nanovdb::Vec3f rk3_integrate(const VelocitySampler& sampler, nanovdb:
 	result[2] = __fmaf_rn(0.33333f, k1[2] + 3.0f * k2[2] + k3[2], start_pos[2]);
 	return result;
 }
+
+
+class ScopedTimerGPU {
+   public:
+	explicit ScopedTimerGPU(std::string name) : name_(std::move(name)) {
+		cudaEventCreate(&start);
+		cudaEventCreate(&stop);
+		cudaEventRecord(start);
+	}
+	~ScopedTimerGPU() {
+		float elapsed;
+		cudaEventRecord(stop);
+		cudaEventSynchronize(stop);
+		cudaEventElapsedTime(&elapsed, start, stop);
+
+		printf("%s Time: %f ms\n", name_.c_str(), elapsed);
+	}
+
+   private:
+	const std::string name_{};
+	cudaEvent_t start{};
+	cudaEvent_t stop{};
+};

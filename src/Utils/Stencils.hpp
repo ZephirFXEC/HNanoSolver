@@ -16,16 +16,35 @@
 #include "nanovdb/NanoVDB.h"
 #include "nanovdb/math/Math.h"
 
-inline __device__ nanovdb::Vec3f __fmaf_rn(const float a, const nanovdb::Vec3f& b, const nanovdb::Vec3f& c) {
-	return nanovdb::Vec3f(__fmaf_rn(a, b[0], c[0]), __fmaf_rn(a, b[1], c[1]), __fmaf_rn(a, b[2], c[2]));
+// Scalar fmaf wrapper that handles both CPU and GPU
+inline __hostdev__ float fmaf_scalar(const float a, const float b, const float c) {
+#if defined(__CUDA_ARCH__)
+	return __fmaf_rn(a, b, c);
+#else
+	return std::fmaf(a, b, c);  // Use std::fmaf for CPU-only compilation
+#endif
 }
 
+// Fused multiply-add for vec3
+inline __device__ nanovdb::Vec3f fmaf(const float a, const nanovdb::Vec3f& b, const nanovdb::Vec3f& c) {
+	return {fmaf_scalar(a, b[0], c[0]), fmaf_scalar(a, b[1], c[1]), fmaf_scalar(a, b[2], c[2])};
+}
+
+inline __host__ openvdb::Vec3f fmaf(const float a, const openvdb::Vec3f& b, const openvdb::Vec3f& c) {
+	return {fmaf_scalar(a, b[0], c[0]), fmaf_scalar(a, b[1], c[1]), fmaf_scalar(a, b[2], c[2])};
+}
 
 template <template <typename> class Vec3T>
 __hostdev__ inline nanovdb::Coord Floor(Vec3T<float>& xyz) {
+#ifdef __CUDA_ARCH__
 	const int32_t i = __float2int_rd(xyz[0]);
 	const int32_t j = __float2int_rd(xyz[1]);
 	const int32_t k = __float2int_rd(xyz[2]);
+#else
+	const int32_t i = static_cast<int32_t>(std::floor(xyz[0]));
+	const int32_t j = static_cast<int32_t>(std::floor(xyz[1]));
+	const int32_t k = static_cast<int32_t>(std::floor(xyz[2]));
+#endif
 
 	// Compute fractional parts in a more optimized way
 	xyz[0] -= static_cast<float>(i);
@@ -144,18 +163,19 @@ class TrilinearSampler {
 		const RealT v1 = RealT(1) - v;
 		const RealT w1 = RealT(1) - w;
 
+
 		// First interpolate along Z
-		const ValueT z00 = __fmaf_rn(w, stencil[0][0][1], w1 * stencil[0][0][0]);
-		const ValueT z01 = __fmaf_rn(w, stencil[0][1][1], w1 * stencil[0][1][0]);
-		const ValueT z10 = __fmaf_rn(w, stencil[1][0][1], w1 * stencil[1][0][0]);
-		const ValueT z11 = __fmaf_rn(w, stencil[1][1][1], w1 * stencil[1][1][0]);
+		const ValueT z00 = fmaf(w, stencil[0][0][1], w1 * stencil[0][0][0]);
+		const ValueT z01 = fmaf(w, stencil[0][1][1], w1 * stencil[0][1][0]);
+		const ValueT z10 = fmaf(w, stencil[1][0][1], w1 * stencil[1][0][0]);
+		const ValueT z11 = fmaf(w, stencil[1][1][1], w1 * stencil[1][1][0]);
 
 		// Then along Y
-		const ValueT y0 = __fmaf_rn(v, z01, v1 * z00);
-		const ValueT y1 = __fmaf_rn(v, z11, v1 * z10);
+		const ValueT y0 = fmaf(v, z01, v1 * z00);
+		const ValueT y1 = fmaf(v, z11, v1 * z10);
 
 		// Finally along X
-		return __fmaf_rn(u, y1, u1 * y0);
+		return fmaf(u, y1, u1 * y0);
 	}
 
    private:

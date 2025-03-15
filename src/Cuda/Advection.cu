@@ -235,7 +235,7 @@ void advect_index_grid_v(HNS::GridIndexedData& data, const float dt, const float
 	cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, advect_vector, 0, 0);
 	const int gridSize = (totalVoxels + blockSize - 1) / blockSize;
 
-	advect_vector<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_outVel, totalVoxels, dt, voxelSize);
+	advect_vector<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_outVel, totalVoxels, dt, inv_voxelSize);
 
 	// Make sure kernel is finished before copying back
 	cudaStreamSynchronize(stream);
@@ -284,7 +284,7 @@ void advect_v(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cud
 	cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, advect_vector, 0, 0);
 	const int gridSize = (totalVoxels + blockSize - 1) / blockSize;
 
-	advect_vector<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_outVel, totalVoxels, dt, voxelSize);
+	advect_vector<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_outVel, totalVoxels, dt, inv_voxelSize);
 
 	// Make sure kernel is finished before copying back
 	cudaStreamSynchronize(stream);

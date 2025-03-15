@@ -84,42 +84,65 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 	// Simulation pipeline with synchronization points
 
 	// Step 1: Advect velocity field
-	advect_vector<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_outVel, totalVoxels, dt, voxelSize);
-	cudaMemcpyAsync(d_velocity, d_outVel, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToDevice, stream);
+	{
+		ScopedTimerGPU timer("HNanoSolver::Advect::Velocity");
+		advect_vector<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_outVel, totalVoxels, dt, 1.0f / voxelSize);
+	}
+
 
 	// Step 2: Apply buoyancy forces
-	vel_y_density<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_inputs[0], d_outVel, totalVoxels);
-	cudaMemcpyAsync(d_velocity, d_outVel, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToDevice, stream);
+	{
+		ScopedTimerGPU timer("HNanoSolver::ExternalForces::Buoyancy");
+		vel_y_density<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_outVel, d_inputs[0], d_velocity, totalVoxels);
+	}
 
 	// Step 3: Calculate velocity field divergence
-	divergence<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_divergence, voxelSize, totalVoxels);
+	{
+		ScopedTimerGPU timer("HNanoSolver::Divergence");
+		// Works :
+		divergence<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_divergence, 1.0f / voxelSize, totalVoxels);
+
+		/* Crashes :
+		auto numLeaves = gpuGrid->nodeCount<0>();
+		divergence_opt<<<numLeaves, dim3(8, 8, 8), 0, stream>>>(gpuGrid, d_velocity, d_divergence, 1.0f / voxelSize, voxels, numLeaves);
+		*/
+	}
+
 
 	// Step 4: Pressure solver (Red-black Gauss-Seidel iterations)
 	constexpr float omega = 1.9f;  // SOR relaxation parameter
-	for (int iter = 0; iter < iteration; ++iter) {
-		redBlackGaussSeidelUpdate<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize, totalVoxels,
-		                                                              0, omega);
+	{
+		ScopedTimerGPU timer("HNanoSolver::Pressure");
+		for (int iter = 0; iter < iteration; ++iter) {
+			redBlackGaussSeidelUpdate<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize,
+			                                                              totalVoxels, 0, omega);
 
-		redBlackGaussSeidelUpdate<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize, totalVoxels,
-		                                                              1, omega);
+			redBlackGaussSeidelUpdate<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize,
+			                                                              totalVoxels, 1, omega);
+		}
 	}
 
-	// Step 5: Apply pressure gradient to enforce incompressibility
-	subtractPressureGradient<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, totalVoxels, d_velocity, d_pressure, d_velocity,
-	                                                             voxelSize);
-
+	{
+		ScopedTimerGPU timer("HNanoSolver::Projection");
+		// Step 5: Apply pressure gradient to enforce incompressibility
+		subtractPressureGradient<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, totalVoxels, d_velocity, d_pressure, d_velocity,
+		                                                             1.0f / voxelSize);
+	}
 	// Sync before advecting scalar fields
 	cudaStreamSynchronize(stream);
 
+
 	// Step 6: Advect all scalar fields in parallel using individual streams
-	for (size_t i = 0; i < floatBlocks.size(); ++i) {
-		advect_scalar<<<gridSize, blockSize, 0, streams[i]>>>(gpuGrid, d_coords, d_velocity, d_inputs[i], d_outputs[i], totalVoxels, dt,
-		                                                      inv_voxelSize);
+	{
+		ScopedTimerGPU timer("HNanoSolver::Advect::Scalar");
+		for (size_t i = 0; i < floatBlocks.size(); ++i) {
+			advect_scalar<<<gridSize, blockSize, 0, streams[i]>>>(gpuGrid, d_coords, d_velocity, d_inputs[i], d_outputs[i], totalVoxels, dt,
+			                                                      inv_voxelSize);
 
-		// Copy results back to host
-		cudaMemcpyAsync(hostPointers[i], d_outputs[i], totalVoxels * sizeof(float), cudaMemcpyDeviceToHost, streams[i]);
+			// Copy results back to host
+			cudaMemcpyAsync(hostPointers[i], d_outputs[i], totalVoxels * sizeof(float), cudaMemcpyDeviceToHost, streams[i]);
+		}
 	}
-
 	// Synchronize all streams
 	for (auto& s : streams) {
 		cudaStreamSynchronize(s);

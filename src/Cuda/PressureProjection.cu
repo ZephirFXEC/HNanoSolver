@@ -39,7 +39,7 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 
 	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
 
-	divergence<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_divergence, voxelSize, totalVoxels);
+	divergence<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_divergence, 1.0f / voxelSize, totalVoxels);
 
 	// Red-black Gauss-Seidel iterations
 	constexpr float omega = 1.9f;  // SOR relaxation parameter
@@ -52,7 +52,7 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 
 	// Apply pressure gradient
 	subtractPressureGradient<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, totalVoxels, d_velocity, d_pressure, d_velocity,
-	                                                              voxelSize);
+	                                                              1.0f / voxelSize);
 
 	// Copy result back asynchronously
 	cudaMemcpyAsync(velocity, d_velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost, stream);
@@ -112,7 +112,7 @@ void pressure_projection(HNS::GridIndexedData& data, const nanovdb::GridHandle<n
 
 	// Apply pressure gradient
 	subtractPressureGradient<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, totalVoxels, d_velocity, d_pressure, d_velocity,
-	                                                              voxelSize);
+	                                                              1.0f / voxelSize);
 
 	// Copy result back asynchronously
 	cudaMemcpyAsync(velocity, d_velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost, stream);
