@@ -23,10 +23,10 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 	float* d_divergence = nullptr;
 	float* d_pressure = nullptr;
 
-	cudaMalloc(&d_velocity, totalVoxels * sizeof(nanovdb::Vec3f));
-	cudaMalloc(&d_coords, totalVoxels * sizeof(nanovdb::Coord));
-	cudaMalloc(&d_divergence, totalVoxels * sizeof(float));
-	cudaMalloc(&d_pressure, totalVoxels * sizeof(float));
+	cudaMallocAsync(&d_velocity, totalVoxels * sizeof(nanovdb::Vec3f), stream);
+	cudaMallocAsync(&d_coords, totalVoxels * sizeof(nanovdb::Coord), stream);
+	cudaMallocAsync(&d_divergence, totalVoxels * sizeof(float), stream);
+	cudaMallocAsync(&d_pressure, totalVoxels * sizeof(float), stream);
 
 	// Use async memory operations with stream
 	cudaMemcpyAsync(d_velocity, velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyHostToDevice, stream);
@@ -39,20 +39,31 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 
 	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
 
-	divergence<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_divergence, 1.0f / voxelSize, totalVoxels);
 
+	int numLeaves = totalVoxels / 512;
+	dim3 numBrick(8, 8, 8);
+	{
+		ScopedTimerGPU timer("HNanoSolver::Divergence", 12 /* Vec3f */ + 4 /* float */, totalVoxels);
+
+		divergence_opt<<<numLeaves, numBrick, 0, stream>>>(gpuGrid, d_velocity, d_divergence, 1.0f / voxelSize, numLeaves);
+	}
 	// Red-black Gauss-Seidel iterations
-	constexpr float omega = 1.9f;  // SOR relaxation parameter
-	for (int iter = 0; iter < iteration; ++iter) {
-		redBlackGaussSeidelUpdate<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize, totalVoxels,
-		                                                               0, omega);
-		redBlackGaussSeidelUpdate<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize, totalVoxels,
-		                                                               1, omega);
+	{
+		ScopedTimerGPU timer("HNanoSolver::Pressure", 8 + 4 * 2 /* float */, totalVoxels * iteration);
+		const float omega = 2.0f / (1.0f + sin(3.14159 * voxelSize));
+		for (int iter = 0; iter < iteration; ++iter) {
+			redBlackGaussSeidelUpdate<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize,
+			                                                               totalVoxels, 0, omega);
+			redBlackGaussSeidelUpdate<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize,
+			                                                               totalVoxels, 1, omega);
+		}
 	}
 
-	// Apply pressure gradient
-	subtractPressureGradient<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, totalVoxels, d_velocity, d_pressure, d_velocity,
-	                                                              1.0f / voxelSize);
+	{
+		ScopedTimerGPU timer("HNanoSolver::Projection", 12 * 2 /* Vec3f */ + 4 /* float */, totalVoxels);
+		subtractPressureGradient_opt<<<numLeaves, numBrick, 0, stream>>>(gpuGrid, d_velocity, d_pressure, d_velocity, 1.0f / voxelSize,
+		                                                                 numLeaves);
+	}
 
 	// Copy result back asynchronously
 	cudaMemcpyAsync(velocity, d_velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost, stream);
@@ -67,11 +78,9 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 }
 
 
-void pressure_projection(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, const size_t iteration,
-                         const float voxelSize, const cudaStream_t& stream) {
+void divergence(HNS::GridIndexedData& data, const float voxelSize, const cudaStream_t& stream) {
 	const size_t totalVoxels = data.size();
-	constexpr int blockSize = 256;
-	int numBlocks = (totalVoxels + blockSize - 1) / blockSize;
+	const size_t numLeaves = totalVoxels / 512;
 
 	const auto vec3fBlocks = data.getBlocksOfType<openvdb::Vec3f>();
 	if (vec3fBlocks.size() != 1) {
@@ -79,43 +88,34 @@ void pressure_projection(HNS::GridIndexedData& data, const nanovdb::GridHandle<n
 	}
 
 	nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>(vec3fBlocks[0]));
+	float* divergence = data.pValues<float>("divergence");
 
 	nanovdb::Vec3f* d_velocity = nullptr;
 	nanovdb::Coord* d_coords = nullptr;
 	float* d_divergence = nullptr;
-	float* d_pressure = nullptr;
 
-	cudaMalloc(&d_velocity, totalVoxels * sizeof(nanovdb::Vec3f));
-	cudaMalloc(&d_coords, totalVoxels * sizeof(nanovdb::Coord));
-	cudaMalloc(&d_divergence, totalVoxels * sizeof(float));
-	cudaMalloc(&d_pressure, totalVoxels * sizeof(float));
+	cudaMallocAsync(&d_velocity, totalVoxels * sizeof(nanovdb::Vec3f), stream);
+	cudaMallocAsync(&d_coords, totalVoxels * sizeof(nanovdb::Coord), stream);
+	cudaMallocAsync(&d_divergence, totalVoxels * sizeof(float), stream);
 
-	// Use async memory operations with stream
 	cudaMemcpyAsync(d_velocity, velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyHostToDevice, stream);
 	cudaMemcpyAsync(d_coords, data.pCoords(), totalVoxels * sizeof(nanovdb::Coord), cudaMemcpyHostToDevice, stream);
+
 	cudaMemsetAsync(d_divergence, 0, totalVoxels * sizeof(float), stream);
-	cudaMemsetAsync(d_pressure, 0, totalVoxels * sizeof(float), stream);
 
-	// Create grid handle and get device grid pointer
+	cudaStreamSynchronize(stream);
+
+	auto handle = nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
+
 	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
+	dim3 numBrick(8, 8, 8);
 
-	divergence<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_divergence, voxelSize, totalVoxels);
-
-	// Red-black Gauss-Seidel iterations
-	constexpr float omega = 1.9f;  // SOR relaxation parameter
-	for (int iter = 0; iter < iteration; ++iter) {
-		redBlackGaussSeidelUpdate<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize, totalVoxels,
-		                                                               0, omega);
-		redBlackGaussSeidelUpdate<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize, totalVoxels,
-		                                                               1, omega);
+	{
+		ScopedTimerGPU("HNanoSolver::Divergenve", 12 + 4, totalVoxels);
+		divergence_opt<<<numLeaves, numBrick, 0, stream>>>(gpuGrid, d_velocity, d_divergence, 1.0f / voxelSize, numLeaves);
 	}
 
-	// Apply pressure gradient
-	subtractPressureGradient<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, totalVoxels, d_velocity, d_pressure, d_velocity,
-	                                                              1.0f / voxelSize);
-
-	// Copy result back asynchronously
-	cudaMemcpyAsync(velocity, d_velocity, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost, stream);
+	cudaMemcpyAsync(divergence, d_divergence, totalVoxels * sizeof(float), cudaMemcpyDeviceToHost, stream);
 
 	// Clean up resources
 	cudaStreamSynchronize(stream);
@@ -123,14 +123,14 @@ void pressure_projection(HNS::GridIndexedData& data, const nanovdb::GridHandle<n
 	cudaFree(d_velocity);
 	cudaFree(d_coords);
 	cudaFree(d_divergence);
-	cudaFree(d_pressure);
 }
 
-extern "C" void Divergence_idx(HNS::GridIndexedData& data, const size_t iterations, const float voxelSize, const cudaStream_t& stream) {
+extern "C" void Divergence(HNS::GridIndexedData& data, const float voxelSize, const cudaStream_t& stream) {
+	divergence(data, voxelSize, stream);
+}
+
+
+extern "C" void ProjectNonDivergent(HNS::GridIndexedData& data, const size_t iterations, const float voxelSize,
+                                    const cudaStream_t& stream) {
 	pressure_projection_idx(data, iterations, voxelSize, stream);
-}
-
-extern "C" void Project(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, const size_t iterations,
-                        const float voxelSize, const cudaStream_t& stream) {
-	pressure_projection(data, handle, iterations, voxelSize, stream);
 }

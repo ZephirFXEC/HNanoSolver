@@ -6,6 +6,7 @@ include_directories(../../externals)
 add_library(Kernels STATIC
         Utils.cuh
         Kernels.cuh
+        Kernel.cu
         Advection.cu
         PressureProjection.cu
         Combustion.cu

@@ -42,6 +42,55 @@ const char* const SOP_HNanoSolverVerb::theDsFile = R"THEDSFILE(
         size    1
         range   { 1! 100 }
 	}
+	parm {
+		name "combustion_rate"
+		label "Combustion Rate"
+		type float
+		size 1
+		default { "0.1" }
+	}
+	parm {
+		name "heat_release"
+		label "Heat Release"
+		type float
+		size 1
+		default { "10.0" }
+	}
+	parm {
+		name "buoyancy_strength"
+		label "Buoyancy Strength"
+		type float
+		size 1
+		default { "1.0" }
+	}
+	parm {
+		name "ambient_temp"
+		label "Ambient Temperature"
+		type float
+		size 1
+		default { "23.0" }
+	}
+	parm {
+		name "temperature_diffusion"
+		label "Temperature Diffusion"
+		type float
+		size 1
+		default { "0.02" }
+	}
+	parm {
+		name "fuel_diffusion"
+		label "Fuel Diffusion"
+		type float
+		size 1
+		default { "0.01" }
+	}
+	parm {
+		name "ignition_temp"
+		label "Ignition Temperature"
+		type float
+		size 1
+		default { "150.0" }
+	}
 }
 )THEDSFILE";
 
@@ -82,7 +131,7 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 		return;
 	}
 
-	if (auto err = loadGrid(source_input, source_grids); err != UT_ERROR_NONE) {
+	if (auto err = loadGrid(source_input, source_grids); err != UT_ERROR_NONE && err != UT_ERROR_ABORT) {
 		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load density grid");
 		return;
 	}
@@ -155,6 +204,7 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 		builder.build();
 	}
 
+
 	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle;
 	{
 		ScopedTimer timer("Building Index Grid");
@@ -167,7 +217,17 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 	{
 		const float deltaTime = static_cast<float>(sopparms.getTimestep());
 		const int iterations = sopparms.getIterations();
-		Compute_Sim(data, handle, iterations, deltaTime, feedback_vector_grids[0]->voxelSize()[0], stream);
+
+		CombustionParams params;
+		params.combustionRate = sopparms.getCombustion_rate();
+		params.heatRelease = sopparms.getHeat_release();
+		params.buoyancyStrength = sopparms.getBuoyancy_strength();
+		params.ambientTemp = sopparms.getAmbient_temp();
+		params.temperatureDiffusion = sopparms.getTemperature_diffusion();
+		params.fuelDiffusion = sopparms.getFuel_diffusion();
+		params.ignitionTemp = sopparms.getIgnition_temp();
+
+		Compute_Sim(data, handle, iterations, deltaTime, feedback_vector_grids[0]->voxelSize()[0], params, stream);
 	}
 
 

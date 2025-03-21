@@ -52,7 +52,7 @@ void combustion(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::c
 	const int numBlocks = (totalVoxels + blockSize - 1) / blockSize;
 	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
 
-	vel_y_density<<<numBlocks, blockSize, 0, mainStream>>>(gpuGrid, d_coords, d_velocity, d_density, d_outVel, totalVoxels);
+	// vel_y_density<<<numBlocks, blockSize, 0, mainStream>>>(gpuGrid, d_velocity, d_density, d_outVel, totalVoxels);
 
 	cudaMemcpyAsync(velocity, d_outVel, totalVoxels * sizeof(nanovdb::Vec3f), cudaMemcpyDeviceToHost, mainStream);
 

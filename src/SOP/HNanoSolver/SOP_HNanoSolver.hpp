@@ -17,6 +17,24 @@
 #include "nanovdb/GridHandle.h"
 #include "nanovdb/cuda/DeviceBuffer.h"
 
+#define COMBUSTION_RATE 0.1f         // Rate at which fuel burns
+#define HEAT_RELEASE 10.0f           // Heat released per unit of fuel burned
+#define BUOYANCY_STRENGTH 1.0f       // Strength of buoyant force
+#define AMBIENT_TEMP 23.0f           // Ambient temperature in Celsius
+#define TEMPERATURE_DIFFUSION 0.02f  // Temperature diffusion coefficient
+#define FUEL_DIFFUSION 0.01f         // Fuel diffusion coefficient
+#define IGNITION_TEMP 150.0f         // Temperature required for combustion
+
+struct CombustionParams {
+	float combustionRate = COMBUSTION_RATE;
+	float heatRelease = HEAT_RELEASE;
+	float buoyancyStrength = BUOYANCY_STRENGTH;
+	float ambientTemp = AMBIENT_TEMP;
+	float temperatureDiffusion = TEMPERATURE_DIFFUSION;
+	float fuelDiffusion = FUEL_DIFFUSION;
+	float ignitionTemp = IGNITION_TEMP;
+};
+
 class SOP_HNanoSolver final : public SOP_Node {
    public:
 	SOP_HNanoSolver(OP_Network* net, const char* name, OP_Operator* op) : SOP_Node(net, name, op) {
@@ -72,4 +90,4 @@ class SOP_HNanoSolverVerb final : public SOP_NodeVerb {
 extern "C" void CreateIndexGrid(HNS::GridIndexedData& data, nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, float voxelSize);
 
 extern "C" void Compute_Sim(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, int iteration,
-                            float dt, float voxelSize, const cudaStream_t& stream);
+                            float dt, float voxelSize, const CombustionParams& params, const cudaStream_t& stream);

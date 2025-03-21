@@ -96,26 +96,46 @@ void SOP_HNanoVDBProjectNonDivergentVerb::cook(const CookParms& cookparms) const
 
 
 	SrcGridT::Ptr domain = openvdb::createGrid<openvdb::FloatGrid>();
+	openvdb::FloatGrid::Ptr divergence = openvdb::createGrid<openvdb::FloatGrid>();
 	{
 		ScopedTimer timer("Merging topology");
 		domain->topologyUnion(*in_velocity);
 		domain->tree().voxelizeActiveTiles();
+
+		if (sopparms.getOutdiv()) {
+			divergence->setTransform(in_velocity->transform().copy());
+			divergence->setGridClass(openvdb::GRID_FOG_VOLUME);
+			divergence->setName("divergence");
+			divergence->topologyUnion(*in_velocity);
+			divergence->tree().voxelizeActiveTiles();
+		}
 	}
+
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domain, &data);
 	builder.setAllocType(AllocationType::Standard);
 	{
 		builder.addGrid(in_velocity, in_velocity->getName());
+		if (sopparms.getOutdiv()) {
+			builder.addGrid(divergence, "divergence");
+		}
 		builder.build();
 	}
 
-	{
+
+	if (sopparms.getOutdiv()) {
+		ScopedTimer timer_div("Computing divergence");
+		Divergence(data, in_velocity->voxelSize()[0], stream);
+	} else {
 		ScopedTimer timer_kernel("Launching kernels");
-		Divergence_idx(data, sopparms.getIterations(), in_velocity->voxelSize()[0], stream);
+		ProjectNonDivergent(data, sopparms.getIterations(), in_velocity->voxelSize()[0], stream);
 	}
 
-	{
+	if (sopparms.getOutdiv()) {
+		openvdb::FloatGrid::Ptr out = builder.writeIndexGrid<openvdb::FloatGrid>(divergence->getName(), divergence->voxelSize()[0]);
+		GU_PrimVDB::buildFromGrid(*detail, out, nullptr, out->getName().c_str());
+	} else {
 		openvdb::VectorGrid::Ptr div = builder.writeIndexGrid<openvdb::VectorGrid>(in_velocity->getName(), in_velocity->voxelSize()[0]);
 		GU_PrimVDB::buildFromGrid(*detail, div, nullptr, div->getName().c_str());
 	}

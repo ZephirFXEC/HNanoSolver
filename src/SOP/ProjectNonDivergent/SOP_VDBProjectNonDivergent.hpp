@@ -66,4 +66,5 @@ class SOP_HNanoVDBProjectNonDivergentVerb final : public SOP_NodeVerb {
 	static const char* const theDsFile;
 };
 
-extern "C" void Divergence_idx(HNS::GridIndexedData& data, size_t iteration, float voxelSize, const cudaStream_t& stream);
+extern "C" void ProjectNonDivergent(HNS::GridIndexedData& data, size_t iteration, float voxelSize, const cudaStream_t& stream);
+extern "C" void Divergence(HNS::GridIndexedData& data,float voxelSize, const cudaStream_t& stream);

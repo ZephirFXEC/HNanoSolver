@@ -53,37 +53,132 @@ __device__ __forceinline__ nanovdb::Vec3f lerp(const nanovdb::Vec3f& a, const na
 
 __device__ __forceinline__ float enforceNonNegative(const float x) { return fmaxf(0.0f, x); }
 
+__device__ __forceinline__ int clampCoord(const int c, const int minC, const int maxC) {
+	if (c < minC) return minC;
+	if (c > maxC) return maxC;
+	return c;
+}
 
-inline __device__ nanovdb::Vec3f sampleMACVelocity(
-    const decltype(nanovdb::math::createSampler<1>(
-        std::declval<const decltype(std::declval<nanovdb::Vec3fGrid>().tree().getAccessor())>()))& velSampler,
-    const nanovdb::Vec3f& pos) {
-	const float u = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
-	const float v = velSampler(pos + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
-	const float w = velSampler(pos + nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
+inline __device__ nanovdb::Vec3f FaceVelocity(const IndexSampler<nanovdb::Vec3f, 1>& velSampler, const nanovdb::Coord& pos) {
+	const nanovdb::Vec3f center = velSampler(pos);
+	const float u = 0.5f * (velSampler(pos - nanovdb::Coord(1, 0, 0))[0] + center[0]);
+	const float v = 0.5f * (velSampler(pos - nanovdb::Coord(0, 1, 0))[1] + center[1]);
+	const float w = 0.5f * (velSampler(pos - nanovdb::Coord(0, 0, 1))[2] + center[2]);
 	return {u, v, w};
 }
 
-inline __device__ nanovdb::Vec3f sampleMACVelocity_idx(const IndexSampler<nanovdb::Vec3f, 1>& velSampler, const nanovdb::Vec3f& pos) {
-	const float u = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
-	const float v = velSampler(pos + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
-	const float w = velSampler(pos + nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
-	return {u, v, w};
+inline __device__ nanovdb::Vec3f MACToFaceCentered(const IndexSampler<nanovdb::Vec3f, 1>& velSampler, const nanovdb::Coord& pos) {
+	nanovdb::Vec3f center = velSampler(pos);
+
+	// Left and right face velocity
+	const float xm = 0.5f * (velSampler(pos - nanovdb::Coord(1, 0, 0))[0] + center[0]);
+	const float xp = 0.5f * (center[0] + velSampler(pos + nanovdb::Coord(1, 0, 0))[0]);
+
+	// Top and bottom face velocity
+	const float ym = 0.5f * (velSampler(pos - nanovdb::Coord(0, 1, 0))[1] + center[1]);
+	const float yp = 0.5f * (center[1] + velSampler(pos + nanovdb::Coord(0, 1, 0))[1]);
+
+	// Front and back face velocity
+	const float zm = 0.5f * (velSampler(pos - nanovdb::Coord(0, 0, 1))[2] + center[2]);
+	const float zp = 0.5f * (center[2] + velSampler(pos + nanovdb::Coord(0, 0, 1))[2]);
+
+	return nanovdb::Vec3f(0.5f * (xm + xp), 0.5f * (ym + yp), 0.5f * (zm + zp));
 }
 
+inline __device__ nanovdb::Vec3f MACToFaceCentered(const IndexSampler<nanovdb::Vec3f, 1>& velSampler, const nanovdb::Vec3f& pos) {
+	nanovdb::Vec3f result;
 
-inline __device__ nanovdb::Vec3f MACToFaceCentered_idx(const IndexSampler<nanovdb::Vec3f, 1>& velSampler, const nanovdb::Vec3f& pos) {
-	const float up = velSampler(pos + nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
-	const float vp = velSampler(pos + nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
-	const float wp = velSampler(pos + nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
+	// Precompute the base positions for each component
+	const nanovdb::Vec3f adj_pos_x = pos - nanovdb::Vec3f(0.5f, 0.0f, 0.0f);
+	const nanovdb::Vec3f adj_pos_y = pos - nanovdb::Vec3f(0.0f, 0.5f, 0.0f);
+	const nanovdb::Vec3f adj_pos_z = pos - nanovdb::Vec3f(0.0f, 0.0f, 0.5f);
 
-	const float um = velSampler(pos - nanovdb::Vec3f(0.5f, 0.0f, 0.0f))[0];
-	const float vm = velSampler(pos - nanovdb::Vec3f(0.0f, 0.5f, 0.0f))[1];
-	const float wm = velSampler(pos - nanovdb::Vec3f(0.0f, 0.0f, 0.5f))[2];
+	const nanovdb::Coord base_x = adj_pos_x.floor();
+	const nanovdb::Coord base_y = adj_pos_y.floor();
+	const nanovdb::Coord base_z = adj_pos_z.floor();
 
-	return {(up + um) / 2.0f, (vp + vm) / 2.0f, (wp + wm) / 2.0f};
+	const nanovdb::Vec3f frac_x = adj_pos_x - nanovdb::Vec3f(base_x);
+	const nanovdb::Vec3f frac_y = adj_pos_y - nanovdb::Vec3f(base_y);
+	const nanovdb::Vec3f frac_z = adj_pos_z - nanovdb::Vec3f(base_z);
+
+	// Cache sampled velocities to avoid redundant lookups
+	nanovdb::Vec3f velocities[27];  // 3x3x3 grid to cache all needed samples
+
+	// Sample velocities for all needed positions
+	for (int z = 0; z <= 2; ++z) {
+		for (int y = 0; y <= 2; ++y) {
+			for (int x = 0; x <= 2; ++x) {
+				// Base position for the current component
+				nanovdb::Coord baseCoord = base_x + nanovdb::Coord(x - 1, y - 1, z - 1);
+				int idx = x + 3 * y + 9 * z;
+				velocities[idx] = velSampler(baseCoord);
+			}
+		}
+	}
+
+	// Helper function for trilinear interpolation
+	auto trilinear = [](const float values[8], const nanovdb::Vec3f& frac) {
+		const float v00 = lerp(values[0], values[1], frac[0]);
+		const float v01 = lerp(values[2], values[3], frac[0]);
+		const float v0 = lerp(v00, v01, frac[1]);
+
+		const float v10 = lerp(values[4], values[5], frac[0]);
+		const float v11 = lerp(values[6], values[7], frac[0]);
+		const float v1 = lerp(v10, v11, frac[1]);
+
+		return lerp(v0, v1, frac[2]);
+	};
+
+	// X-component interpolation (staggered at x-faces)
+	{
+		float vx[8];
+		for (int z = 0; z <= 1; ++z) {
+			for (int y = 0; y <= 1; ++y) {
+				for (int x = 0; x <= 1; ++x) {
+					// Calculate indices into our cached velocities
+					const int idx1 = (x + 0) + 3 * (y + 1) + 9 * (z + 1);  // base_x + (x,y,z)
+					const int idx2 = (x + 1) + 3 * (y + 1) + 9 * (z + 1);  // base_x + (x+1,y,z)
+					vx[x + 2 * y + 4 * z] = 0.5f * (velocities[idx1][0] + velocities[idx2][0]);
+				}
+			}
+		}
+		result[0] = trilinear(vx, frac_x);
+	}
+
+	// Y-component interpolation (staggered at y-faces)
+	{
+		float vy[8];
+		for (int z = 0; z <= 1; ++z) {
+			for (int y = 0; y <= 1; ++y) {
+				for (int x = 0; x <= 1; ++x) {
+					// Calculate indices into our cached velocities
+					int idx1 = (x + 1) + 3 * (y + 0) + 9 * (z + 1);  // base_y + (x,y,z)
+					int idx2 = (x + 1) + 3 * (y + 1) + 9 * (z + 1);  // base_y + (x,y+1,z)
+					vy[x + 2 * y + 4 * z] = 0.5f * (velocities[idx1][1] + velocities[idx2][1]);
+				}
+			}
+		}
+		result[1] = trilinear(vy, frac_y);
+	}
+
+	// Z-component interpolation (staggered at z-faces)
+	{
+		float vz[8];
+		for (int z = 0; z <= 1; ++z) {
+			for (int y = 0; y <= 1; ++y) {
+				for (int x = 0; x <= 1; ++x) {
+					// Calculate indices into our cached velocities
+					int idx1 = (x + 1) + 3 * (y + 1) + 9 * (z + 0);  // base_z + (x,y,z)
+					int idx2 = (x + 1) + 3 * (y + 1) + 9 * (z + 1);  // base_z + (x,y,z+1)
+					vz[x + 2 * y + 4 * z] = 0.5f * (velocities[idx1][2] + velocities[idx2][2]);
+				}
+			}
+		}
+		result[2] = trilinear(vz, frac_z);
+	}
+
+	return result;
 }
-
 
 template <typename VelocitySampler>
 __device__ nanovdb::Vec3f rk4_integrate(const VelocitySampler& sampler, nanovdb::Vec3f start_pos, float h) {
@@ -115,22 +210,33 @@ __device__ nanovdb::Vec3f rk3_integrate(const VelocitySampler& sampler, nanovdb:
 
 class ScopedTimerGPU {
    public:
-	explicit ScopedTimerGPU(std::string name) : name_(std::move(name)) {
+	explicit ScopedTimerGPU(const std::string& name) : name_(name), bytes(0), voxels(0) {
 		cudaEventCreate(&start);
 		cudaEventCreate(&stop);
 		cudaEventRecord(start);
 	}
+
+	ScopedTimerGPU(const std::string& name, const uint16_t bytes, const size_t voxels) : name_(name), bytes(bytes), voxels(voxels) {
+		cudaEventCreate(&start);
+		cudaEventCreate(&stop);
+		cudaEventRecord(start);
+	}
+
 	~ScopedTimerGPU() {
 		float elapsed;
 		cudaEventRecord(stop);
 		cudaEventSynchronize(stop);
 		cudaEventElapsedTime(&elapsed, start, stop);
 
-		printf("%s Time: %f ms\n", name_.c_str(), elapsed);
+		printf("-- %s -- \n", name_.c_str());
+		printf("Bandwidth: %f GB/s\n", voxels * (bytes / 1e9) / (elapsed / 1e3));
+		printf("Time: %f ms\n", elapsed);
 	}
 
    private:
 	const std::string name_{};
+	const uint16_t bytes;
+	const size_t voxels;
 	cudaEvent_t start{};
 	cudaEvent_t stop{};
 };

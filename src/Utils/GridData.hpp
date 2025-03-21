@@ -99,12 +99,6 @@ struct GridIndexedData {
 		return block ? block->data() : nullptr;
 	}
 
-	/// @brief returns every openvdb::vec3f without name
-	[[nodiscard]] openvdb::Vec3f* pValues() {
-		auto* block = getValueBlock<openvdb::Vec3f>("velocity");
-		return block ? block->data() : nullptr;
-	}
-
 	/// @brief Convenience function: returns the data pointer for block <T> with given name
 	///        or nullptr if not found / mismatch.
 	template <typename T>
