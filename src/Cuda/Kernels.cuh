@@ -51,16 +51,19 @@ __global__ void subtractPressureGradient_opt(const nanovdb::NanoGrid<nanovdb::Va
                                              nanovdb::Vec3f* __restrict__ out, float inv_voxelSize, size_t numLeaves);
 
 
-__global__ void subtractPressureGradient(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __restrict__ domainGrid,
-                                         const nanovdb::Coord* __restrict__ d_coords, size_t totalVoxels,
-                                         const nanovdb::Vec3f* __restrict__ velocity, const float* __restrict__ pressure,
-                                         nanovdb::Vec3f* __restrict__ out, float inv_voxelSize);
+__global__ void subtractPressureGradient(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const nanovdb::Coord* d_coords,
+                                         size_t totalVoxels, const nanovdb::Vec3f* velocity, const float* pressure, nanovdb::Vec3f* out,
+                                         float inv_voxelSize);
 
-__global__ void temperature_buoyancy(const nanovdb::Vec3f* velocityData, const float* tempData, nanovdb::Vec3f* outVel, const float dt,
+__global__ void temperature_buoyancy(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid,
+                                     const nanovdb::Coord* __restrict__ d_coords, const nanovdb::Vec3f* __restrict__ velocityData,
+                                     const float* __restrict__ tempData, nanovdb::Vec3f* __restrict__ outVel, const float dt,
                                      float ambient_temp, float buoyancy_strength, size_t totalVoxels);
 
-__global__ void combustion(const float* fuelData, const float* tempData, float* outFuel, float* outTemp, const float dt,
-                           float ignition_temp, float combustion_rate, float heat_release, size_t totalVoxels);
+__global__ void combustion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const nanovdb::Coord* __restrict__ d_coords,
+                           const float* __restrict__ fuelData, const float* __restrict__ tempData, float* __restrict__ outFuel,
+                           float* __restrict__ outTemp, const float dt, float ignition_temp, float combustion_rate, float heat_release,
+                           size_t totalVoxels);
 
 __global__ void diffusion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const nanovdb::Coord* __restrict__ d_coords,
                           const float* tempData, const float* fuelData, float* outTemp, float* outFuel, const float dt, float temp_diff,

@@ -24,7 +24,7 @@ __global__ void advect_scalar(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __
 	const float phiOrig = inData[idx];
 
 	// MAC Velocity for backtrace
-	const nanovdb::Vec3f velCenter = MACToFaceCentered(velocitySampler, coord);
+	const nanovdb::Vec3f velCenter = velocitySampler(coord);
 
 	// ------------------------------------------------------------------------
 	// Forward pass (semi-Lagrangian backtrace)
@@ -89,7 +89,7 @@ __global__ void advect_vector(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __
 	const nanovdb::Vec3f pos = coord.asVec3s();
 
 	// Original velocity at the cell or face
-	const nanovdb::Vec3f velOrig = MACToFaceCentered(velocitySampler, coord);
+	const nanovdb::Vec3f velOrig = velocitySampler(coord);
 
 	// Forward pass (backtrace)
 	const nanovdb::Vec3f backPos = pos - velOrig * scaled_dt;
@@ -390,135 +390,136 @@ __global__ void subtractPressureGradient_opt(const nanovdb::NanoGrid<nanovdb::Va
 		const int lz = tidz + 1;
 
 		// Load current cell's
-		const nanovdb::Vec3f v_c = s_vel[lz][ly][lx];
-		const float p_c = s_pressure[lz][ly][lx];
+		const nanovdb::Vec3f u_star_c = s_vel[lz][ly][lx];
 
-		nanovdb::Vec3f v;
+		// Pressure values at neighbours
+		const float p_xp = s_pressure[lz][ly][lx + 1];  // p(i+1, j, k)
+		const float p_xm = s_pressure[lz][ly][lx - 1];  // p(i-1, j, k)
+		const float p_yp = s_pressure[lz][ly + 1][lx];  // p(i, j+1, k)
+		const float p_ym = s_pressure[lz][ly - 1][lx];  // p(i, j-1, k)
+		const float p_zp = s_pressure[lz + 1][ly][lx];  // p(i, j, k+1)
+		const float p_zm = s_pressure[lz - 1][ly][lx];  // p(i, j, k-1)
 
-		const float u = (v_c + s_vel[lz][ly][lx + 1])[0] * 0.5f;
-		const float p_right = s_pressure[lz][ly][lx + 1];
-		v[0] = u - (p_right - p_c) * inv_voxelSize;
+		// Central difference gradient: grad(p)_x = (p(i+1) - p(i-1)) / (2*dx)
+		// Multiply by 0.5f * inv_voxelSize which is 1 / (2 * dx)
+		const float gradP_x = (p_xp - p_xm) * 0.5f * inv_voxelSize;
+		const float gradP_y = (p_yp - p_ym) * 0.5f * inv_voxelSize;
+		const float gradP_z = (p_zp - p_zm) * 0.5f * inv_voxelSize;
 
-		const float v_comp = (v_c + s_vel[lz][ly + 1][lx])[1] * 0.5f;
-		const float p_top = s_pressure[lz][ly + 1][lx];
-		v[1] = v_comp - (p_top - p_c) * inv_voxelSize;
+		// Form the gradient vector at the cell center
+		const nanovdb::Vec3f gradP_c = {gradP_x, gradP_y, gradP_z};
 
-		const float w = (v_c + s_vel[lz + 1][ly][lx])[2] * 0.5f;
-		const float p_front = s_pressure[lz + 1][ly][lx];
-		v[2] = w - (p_front - p_c) * inv_voxelSize;
+		// --- Apply Pressure Gradient ---
+		// u_n+1 = u* - dt * grad(p)  (Assuming rho=1)
+		// Apply the update using the time step dt
+		const nanovdb::Vec3f u_final_c = u_star_c - gradP_c;
 
-		out[idxSampler.offset(origin + nanovdb::Coord(tidx, tidy, tidz))] = v;
+
+		out[idxSampler.offset(origin + nanovdb::Coord(tidx, tidy, tidz))] = u_final_c;
 	}
 }
 
 
-__global__ void subtractPressureGradient(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __restrict__ domainGrid,
-                                         const nanovdb::Coord* __restrict__ d_coords, const size_t totalVoxels,
-                                         const nanovdb::Vec3f* __restrict__ velocity, const float* __restrict__ pressure,
-                                         nanovdb::Vec3f* __restrict__ out, const float inv_voxelSize) {
+__global__ void subtractPressureGradient(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const nanovdb::Coord* d_coords,
+                                         const size_t totalVoxels, const nanovdb::Vec3f* velocity, const float* pressure,
+                                         nanovdb::Vec3f* out, const float inv_voxelSize) {
 	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 	if (tid >= totalVoxels) return;
 
-	// Accessors / Samplers
+	// Samplers
 	const IndexOffsetSampler<0> idxSampler(*domainGrid);
-	// The cell center coordinate
-	const nanovdb::Coord& c = d_coords[tid];
-	const nanovdb::Vec3f& vel_c = velocity[tid];
-
 	const auto pressureSampler = IndexSampler<float, 0>(idxSampler, pressure);
-	const auto velSampler = IndexSampler<nanovdb::Vec3f, 0>(idxSampler, velocity);
 
-	nanovdb::Vec3f v;
+	// The cell center coordinate associated with this thread
+	const nanovdb::Coord c = d_coords[tid];
 
-	// For u-component at (i+1/2,j,k)
-	// Use both neighbors for velocity averaging, matching the divergence calculation
-	const nanovdb::Vec3f vel_xp = velSampler(c + nanovdb::Coord(1, 0, 0));
+	// Get the intermediate cell-centered velocity u*
+	const nanovdb::Vec3f u_star_c = velocity[tid];
 
-	// Use central differencing for pressure
-	const float p_right = pressureSampler(c + nanovdb::Coord(1, 0, 0));  // p(i+1,j,k)
-	const float p_left = pressureSampler(c - nanovdb::Coord(1, 0, 0));   // p(i-1,j,k)
+	// --- Calculate Pressure Gradient at Cell Center (i, j, k) using Central Differences ---
 
-	// Average velocity from neighbors (central)
-	const float u = (vel_c[0] + vel_xp[0]) * 0.5f;
+	// Pressure values at neighbours
+	const float p_xp = pressureSampler(c + nanovdb::Coord(1, 0, 0));  // p(i+1, j, k)
+	const float p_xm = pressureSampler(c - nanovdb::Coord(1, 0, 0));  // p(i-1, j, k)
+	const float p_yp = pressureSampler(c + nanovdb::Coord(0, 1, 0));  // p(i, j+1, k)
+	const float p_ym = pressureSampler(c - nanovdb::Coord(0, 1, 0));  // p(i, j-1, k)
+	const float p_zp = pressureSampler(c + nanovdb::Coord(0, 0, 1));  // p(i, j, k+1)
+	const float p_zm = pressureSampler(c - nanovdb::Coord(0, 0, 1));  // p(i, j, k-1)
 
-	// Apply symmetric pressure gradient
-	v[0] = u - (p_right - p_left) * 0.5f * inv_voxelSize;
+	// Central difference gradient: grad(p)_x = (p(i+1) - p(i-1)) / (2*dx)
+	// Multiply by 0.5f * inv_voxelSize which is 1 / (2 * dx)
+	const float gradP_x = (p_xp - p_xm) * 0.5f * inv_voxelSize;
+	const float gradP_y = (p_yp - p_ym) * 0.5f * inv_voxelSize;
+	const float gradP_z = (p_zp - p_zm) * 0.5f * inv_voxelSize;
 
-	// For v-component at (i,j+1/2,k)
-	const nanovdb::Vec3f vel_yp = velSampler(c + nanovdb::Coord(0, 1, 0));
+	// Form the gradient vector at the cell center
+	const nanovdb::Vec3f gradP_c = {gradP_x, gradP_y, gradP_z};
 
-	const float p_top = pressureSampler(c + nanovdb::Coord(0, 1, 0));     // p(i,j+1,k)
-	const float p_bottom = pressureSampler(c - nanovdb::Coord(0, 1, 0));  // p(i,j-1,k)
+	// --- Apply Pressure Gradient ---
+	// u_n+1 = u* - dt * grad(p)  (Assuming rho=1)
+	// Apply the update using the time step dt
+	const nanovdb::Vec3f u_final_c = u_star_c - gradP_c;
 
-	// Average velocity from neighbors (central)
-	const float v_comp = (vel_c[1] + vel_yp[1]) * 0.5f;
+	// --- Boundary Conditions ---
+	// Central differencing requires neighbours at distance 1 (+/-1).
+	// If a neighbour sample (e.g., p_xp) accesses an inactive voxel or goes
+	// outside the simulation domain, the value returned by pressureSampler matters.
+	// If it returns 0, it might impose an artificial gradient near boundaries.
+	// For solid walls (Neumann boundary for pressure, dp/dn=0), you might need
+	// specific handling or ensure the sampler returns the pressure from the
+	// cell *inside* the boundary (mirroring).
 
-	// Apply symmetric pressure gradient
-	v[1] = v_comp - (p_top - p_bottom) * 0.5f * inv_voxelSize;
-
-	// For w-component at (i,j,k+1/2)
-	const nanovdb::Vec3f vel_zp = velSampler(c + nanovdb::Coord(0, 0, 1));
-
-	const float p_front = pressureSampler(c + nanovdb::Coord(0, 0, 1));  // p(i,j,k+1)
-	const float p_back = pressureSampler(c - nanovdb::Coord(0, 0, 1));   // p(i,j,k-1)
-
-	// Average velocity from neighbors (central)
-	const float w = (vel_c[2] + vel_zp[2]) * 0.5f;
-
-	// Apply symmetric pressure gradient
-	v[2] = w - (p_front - p_back) * 0.5f * inv_voxelSize;
-
-	out[tid] = v;
+	out[tid] = u_final_c;
 }
 
 
-__global__ void temperature_buoyancy(const nanovdb::Vec3f* velocityData, const float* tempData, nanovdb::Vec3f* outVel, const float dt,
+__global__ void temperature_buoyancy(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid,
+                                     const nanovdb::Coord* __restrict__ d_coords, const nanovdb::Vec3f* __restrict__ velocityData,
+                                     const float* __restrict__ tempData, nanovdb::Vec3f* __restrict__ outVel, const float dt,
                                      float ambient_temp, float buoyancy_strength, size_t totalVoxels) {
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= totalVoxels) return;
+	const IndexOffsetSampler<0> sampler(*domainGrid);
+	const auto tempSampler = IndexSampler<float, 0>(sampler, tempData);
+	const auto velSampler = IndexSampler<nanovdb::Vec3f, 0>(sampler, velocityData);
 
-	// Get current temperature and velocity
-	const float temp = tempData[idx];
-	const nanovdb::Vec3f vel = velocityData[idx];
+	const auto vel = velSampler(d_coords[idx]);
 
-	// Calculate temperature difference from ambient
+	const float temp = tempSampler(d_coords[idx]);
+	if (temp <= ambient_temp) {
+		outVel[idx] = vel;
+		return;
+	}
+
 	const float tempDiff = temp - ambient_temp;
+	const nanovdb::Vec3f buoyancyForce(0.0f, fmaxf(0.0f, tempDiff * buoyancy_strength), 0.0f);
 
-	// Add buoyancy force proportional to temperature difference
-	// High temperatures cause upward motion (positive Y in most simulation setups)
-	const nanovdb::Vec3f buoyancyForce(0.0f, max(0.0f, tempDiff * buoyancy_strength), 0.0f);
-
-	// Update velocity with buoyancy
 	outVel[idx] = vel + buoyancyForce * dt;
 }
 
-
-__global__ void combustion(const float* fuelData, const float* tempData, float* outFuel, float* outTemp, const float dt,
-                           float ignition_temp, float combustion_rate, float heat_release, size_t totalVoxels) {
+__global__ void combustion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const nanovdb::Coord* __restrict__ d_coords,
+                           const float* __restrict__ fuelData, const float* __restrict__ tempData, float* __restrict__ outFuel,
+                           float* __restrict__ outTemp, const float dt, float ignition_temp, float combustion_rate, float heat_release,
+                           size_t totalVoxels) {
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= totalVoxels) return;
 
-	// Get current state
-	const float fuel = fuelData[idx];
-	const float temp = tempData[idx];
+	const IndexOffsetSampler<0> sampler(*domainGrid);
+	const auto tempSampler = IndexSampler<float, 0>(sampler, tempData);
+	const auto fuelSampler = IndexSampler<float, 0>(sampler, fuelData);
 
-	// Initialize output values with input values
+
+	const float fuel = fuelSampler(d_coords[idx]);
+	const float temp = tempSampler(d_coords[idx]);
 	float newFuel = fuel;
 	float newTemp = temp;
 
-	// Only process combustion if we have fuel and temperature is above ignition point
 	if (fuel > 0.0f && temp >= ignition_temp) {
-		// Calculate how much fuel is burned this step
-		const float fuelBurned = min(fuel, combustion_rate * dt);
-
-		// Update fuel level by reducing it
+		const float fuelBurned = fminf(fuel, combustion_rate * dt);
 		newFuel -= fuelBurned;
-
-		// Update temperature based on heat release from combustion
 		newTemp += fuelBurned * heat_release;
 	}
 
-	// Store results
 	outFuel[idx] = newFuel;
 	outTemp[idx] = newTemp;
 }
@@ -530,14 +531,12 @@ __global__ void diffusion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domain
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= totalVoxels) return;
 
-	// Get current voxel coordinate
-	const auto sampler = IndexOffsetSampler<0>(*domainGrid);
+	const IndexOffsetSampler<0> sampler(*domainGrid);
+	const auto tempSampler = IndexSampler<float, 0>(sampler, tempData);
+	const auto fuelSampler = IndexSampler<float, 0>(sampler, fuelData);
 
-	// Get current temperature and fuel values
-	const float centerTemp = tempData[idx];
-	const float centerFuel = fuelData[idx];
-
-	// Perform a simple 6-neighbor stencil diffusion
+	const float centerTemp = tempSampler(d_coords[idx]);
+	const float centerFuel = fuelSampler(d_coords[idx]);
 	float tempLaplacian = 0.0f;
 	float fuelLaplacian = 0.0f;
 	int neighbors = 0;
@@ -548,13 +547,9 @@ __global__ void diffusion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domain
 	for (auto offset : offsets) {
 		const nanovdb::Coord neighborCoord = d_coords[idx] + offset;
 
-		// Skip if neighbor is outside the domain
-		if (!sampler.isActive(neighborCoord)) continue;
-
 		// Get the neighbor's index and values
-		const uint64_t neighborIdx = sampler.offset(neighborCoord);
-		const float neighborTemp = tempData[neighborIdx];
-		const float neighborFuel = fuelData[neighborIdx];
+		const float neighborTemp = tempSampler(neighborCoord);
+		const float neighborFuel = fuelSampler(neighborCoord);
 
 		// Accumulate Laplacian (difference from center to neighbor)
 		tempLaplacian += (neighborTemp - centerTemp);
@@ -571,6 +566,6 @@ __global__ void diffusion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domain
 		outFuel[idx] = centerFuel;
 	}
 
-	// Apply cooling - temperature gradually returns to ambient
-	outTemp[idx] = outTemp[idx] + (ambient_temp - outTemp[idx]) * dt * 0.1f;
+	// Apply cooling effect
+	outTemp[idx] += (ambient_temp - outTemp[idx]) * dt * 0.1f;
 }

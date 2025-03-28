@@ -92,39 +92,40 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 
 	// Step 2: Apply buoyancy forces
 	{
-		ScopedTimerGPU timer("HNanoSolver::Combustion", 4 * 4 + 8 + 4 * 4 + 12 * 2 + 4, totalVoxels);
+		ScopedTimerGPU timer("HNanoSolver::Combustion", 4 * 4 + 12 + 4 * 4 + 12 * 3 + 4, totalVoxels);
 
 		{
-			ScopedTimerGPU t("HNanoSolver::Combustion::Combust", 4 * 4 /* float */, totalVoxels);
+			ScopedTimerGPU t("HNanoSolver::Combustion::Combust", 4 * 4 + 12 /* float */, totalVoxels);
 
-			combustion<<<gridSize, blockSize, 0, stream>>>(d_inputs["fuel"], d_inputs["temperature"], d_outputs["fuel"],
+			combustion<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_inputs["fuel"], d_inputs["temperature"], d_outputs["fuel"],
 			                                               d_outputs["temperature"], dt, params.ignitionTemp, params.combustionRate,
 			                                               params.heatRelease, totalVoxels);
 		}
-		std::swap(d_inputs["fuel"], d_outputs["fuel"]);
+
 		std::swap(d_inputs["temperature"], d_outputs["temperature"]);
+		std::swap(d_inputs["fuel"], d_outputs["fuel"]);
 
 		{
-			ScopedTimerGPU t("HNanoSolver::Combustion::Diffusion", 8 + 4 * 4 /* float */, totalVoxels);
+			ScopedTimerGPU t("HNanoSolver::Combustion::Diffusion", 12 + 4 * 4 /* float */, totalVoxels);
 
 			diffusion<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_inputs["temperature"], d_inputs["fuel"],
 			                                              d_outputs["temperature"], d_outputs["fuel"], dt, params.temperatureDiffusion,
 			                                              params.fuelDiffusion, params.ambientTemp, totalVoxels);
 		}
 
-		std::swap(d_inputs["fuel"], d_outputs["fuel"]);
 		std::swap(d_inputs["temperature"], d_outputs["temperature"]);
+		std::swap(d_inputs["fuel"], d_outputs["fuel"]);
 
 		{
-			ScopedTimerGPU t("HNanoSolver::Combustion::Buoyancy", 12 * 2 /* Vec3f */ + 4 /* float */, totalVoxels);
-			temperature_buoyancy<<<gridSize, blockSize, 0, stream>>>(d_outVel, d_inputs["temperature"], d_velocity, dt, params.ambientTemp,
-			                                                         params.buoyancyStrength, totalVoxels);
+			ScopedTimerGPU t("HNanoSolver::Combustion::Buoyancy", 12 * 3 /* Vec3f */ + 4 /* float */, totalVoxels);
+			temperature_buoyancy<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_outVel, d_inputs["temperature"], d_velocity, dt,
+			                                                         params.ambientTemp, params.buoyancyStrength, totalVoxels);
 		}
 	}
 
 	// Step 3: Calculate velocity field divergence
 	{
-		ScopedTimerGPU timer("HNanoSolver::Divergence", 12 /* Vec3f */ + 8 + 4 /* float */, totalVoxels);
+		ScopedTimerGPU timer("HNanoSolver::Divergence", 12 /* Vec3f */ + 12 + 4 /* float */, totalVoxels);
 		divergence<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_divergence, inv_voxelSize, totalVoxels);
 	}
 
@@ -132,7 +133,7 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 	// Step 4: Pressure solver (Red-black Gauss-Seidel iterations)
 	float omega = 2.0f / (1.0f + sin(3.14159f * voxelSize));
 	{
-		ScopedTimerGPU timer("HNanoSolver::Pressure", 8 + 4 * 2 /* float */, totalVoxels * iteration);
+		ScopedTimerGPU timer("HNanoSolver::Pressure", 12 + 4 * 2 /* float */, totalVoxels * iteration);
 
 		for (int iter = 0; iter < iteration; ++iter) {
 			redBlackGaussSeidelUpdate<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize,
@@ -146,17 +147,18 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 
 	// Step 5: Apply pressure gradient to enforce incompressibility
 	{
-		ScopedTimerGPU timer("HNanoSolver::Projection", 12 * 2 /* Vec3f */ + 8 + 4 /* float */, totalVoxels);
+		ScopedTimerGPU timer("HNanoSolver::Projection", 12 * 2 /* Vec3f */ + 12 + 4 /* float */, totalVoxels);
 		subtractPressureGradient<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, totalVoxels, d_velocity, d_pressure, d_outVel,
 		                                                             inv_voxelSize);
 	}
+
 	// Sync before advecting scalar fields
 	cudaStreamSynchronize(stream);
 
 
 	// Step 6: Advect all scalar fields in parallel using individual streams
 	{
-		ScopedTimerGPU timer("HNanoSolver::Advect::Scalar", 12 /* Vec3f */ + 8 /* Coords */ + 4 * 2 /* float */, totalVoxels);
+		ScopedTimerGPU timer("HNanoSolver::Advect::Scalar", 12 /* Vec3f */ + 12 /* Coords */ + 4 * 2 /* float */, totalVoxels);
 		for (size_t i = 0; i < floatBlocks.size(); ++i) {
 			advect_scalar<<<gridSize, blockSize, 0, streams[i]>>>(gpuGrid, d_coords, d_outVel, d_inputs[floatBlocks[i]],
 			                                                      d_outputs[floatBlocks[i]], totalVoxels, dt, inv_voxelSize);
