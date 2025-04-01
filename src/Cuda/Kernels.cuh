@@ -37,10 +37,22 @@ __global__ void divergence(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __res
                            const nanovdb::Coord* __restrict__ d_coord, const nanovdb::Vec3f* __restrict__ velocityData,
                            float* __restrict__ outDivergence, float inv_dx, size_t totalVoxels);
 
+__global__ void restrict_to_4x4x4(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const nanovdb::Coord* d_coords,
+                                  const float* inData, float* outData, size_t totalVoxels);
+__global__ void prolongate(const float* __restrict__ coarse, float* __restrict__ fine, nanovdb::Coord coarse_dims,
+                           nanovdb::Coord fine_dims);
 
-__global__ void redBlackGaussSeidelUpdate_opt(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __restrict__ domainGrid,
-                                              const float* __restrict__ d_divergence, float* __restrict__ d_pressure, float voxelSize,
-                                              int numLeaves, int color, float omega);
+__global__ void update_pressure(size_t totalVoxels, const float* pressure, const float* correction);
+
+__global__ void restrict_to_2x2x2(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const nanovdb::Coord* d_coords,
+                                  const float* inData, float* outData, size_t totalVoxels);
+
+__global__ void compute_residual(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const nanovdb::Coord* d_coords,
+                                 const float* pressure, const float* divergence, float* residual, float dx, size_t totalVoxels);
+
+
+__global__ void redBlackGaussSeidelUpdate_opt(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const float* divergence,
+                                              float* pressure, float dx, size_t totalVoxels, int color, float omega);
 
 __global__ void redBlackGaussSeidelUpdate(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __restrict__ domainGrid,
                                           const nanovdb::Coord* __restrict__ d_coord, const float* __restrict__ divergence,

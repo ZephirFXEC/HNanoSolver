@@ -49,13 +49,13 @@ void pressure_projection_idx(HNS::GridIndexedData& data, const size_t iteration,
 	}
 	// Red-black Gauss-Seidel iterations
 	{
-		ScopedTimerGPU timer("HNanoSolver::Pressure", 8 + 4 * 2 /* float */, totalVoxels * iteration);
+		ScopedTimerGPU timer("HNanoSolver::Pressure", 4 * 2 /* float */, totalVoxels * iteration);
 		const float omega = 2.0f / (1.0f + sin(3.14159 * voxelSize));
 		for (int iter = 0; iter < iteration; ++iter) {
-			redBlackGaussSeidelUpdate<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize,
-			                                                               totalVoxels, 0, omega);
-			redBlackGaussSeidelUpdate<<<numBlocks, blockSize, 0, stream>>>(gpuGrid, d_coords, d_divergence, d_pressure, voxelSize,
-			                                                               totalVoxels, 1, omega);
+			redBlackGaussSeidelUpdate_opt<<<numLeaves, numBrick, 0, stream>>>(gpuGrid, d_divergence, d_pressure, voxelSize, totalVoxels, 0,
+			                                                                  omega);
+			redBlackGaussSeidelUpdate_opt<<<numLeaves, numBrick, 0, stream>>>(gpuGrid, d_divergence, d_pressure, voxelSize, totalVoxels, 1,
+			                                                                  omega);
 		}
 	}
 
@@ -88,7 +88,7 @@ void divergence(HNS::GridIndexedData& data, const float voxelSize, const cudaStr
 	}
 
 	nanovdb::Vec3f* velocity = reinterpret_cast<nanovdb::Vec3f*>(data.pValues<openvdb::Vec3f>(vec3fBlocks[0]));
-	float* divergence = data.pValues<float>("divergence");
+	float* h_divergence = data.pValues<float>("divergence");
 
 	nanovdb::Vec3f* d_velocity = nullptr;
 	nanovdb::Coord* d_coords = nullptr;
@@ -106,16 +106,15 @@ void divergence(HNS::GridIndexedData& data, const float voxelSize, const cudaStr
 	cudaStreamSynchronize(stream);
 
 	auto handle = nanovdb::tools::cuda::voxelsToGrid<nanovdb::ValueOnIndex, nanovdb::Coord*>(d_coords, data.size(), voxelSize);
-
 	const auto gpuGrid = handle.deviceGrid<nanovdb::ValueOnIndex>();
-	dim3 numBrick(8, 8, 8);
-
+	int blockSize = 256;
+	const int gridSize = (totalVoxels + blockSize - 1) / blockSize;
 	{
-		ScopedTimerGPU("HNanoSolver::Divergenve", 12 + 4, totalVoxels);
-		divergence_opt<<<numLeaves, numBrick, 0, stream>>>(gpuGrid, d_velocity, d_divergence, 1.0f / voxelSize, numLeaves);
+		ScopedTimerGPU("HNanoSolver::Divergence", 12 + 4, totalVoxels);
+		divergence<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_divergence, 1.0f / voxelSize, totalVoxels);
 	}
 
-	cudaMemcpyAsync(divergence, d_divergence, totalVoxels * sizeof(float), cudaMemcpyDeviceToHost, stream);
+	cudaMemcpyAsync(h_divergence, d_divergence, totalVoxels * sizeof(float), cudaMemcpyDeviceToHost, stream);
 
 	// Clean up resources
 	cudaStreamSynchronize(stream);

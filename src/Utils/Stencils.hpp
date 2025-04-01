@@ -53,17 +53,17 @@ class IndexOffsetSampler<0> {
 	using AccessorT = nanovdb::ChannelAccessor<float, nanovdb::ValueOnIndex>;
 
    public:
-	__hostdev__ explicit IndexOffsetSampler(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>& grid) : mAcc(grid) {}
+	__hostdev__ explicit IndexOffsetSampler(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* grid) : mAcc(*grid) {}
 
 	__hostdev__ __forceinline__ uint64_t offset(const int i, const int j, const int k) const { return mAcc.idx(i, j, k) - 1; }
 
-	__hostdev__ __forceinline__ uint64_t offset(const nanovdb::Coord ijk) const { return mAcc.getIndex(ijk) - 1; }
+	__hostdev__ __forceinline__ uint64_t offset(const nanovdb::Coord& ijk) const { return mAcc.getIndex(ijk) - 1; }
 
 	__hostdev__ __forceinline__ bool isActive(const int i, const int j, const int k) const {
 		return mAcc.isActive(nanovdb::Coord(i, j, k));
 	}
 
-	__hostdev__ __forceinline__ bool isActive(const nanovdb::Coord ijk) const { return mAcc.isActive(ijk); }
+	__hostdev__ __forceinline__ bool isActive(const nanovdb::Coord& ijk) const { return mAcc.isActive(ijk); }
 
    private:
 	AccessorT mAcc;
@@ -81,6 +81,10 @@ class IndexSampler<ValueT, 0> {
 		return mOffsetSampler.isActive(ijk) ? mData[mOffsetSampler.offset(ijk)] : ValueT(0);
 	}
 
+	__hostdev__ __forceinline__ ValueT operator()(const int i, const int j, const int k) const {
+		return mOffsetSampler.isActive(i, j, k) ? mData[mOffsetSampler.offset(i, j, k)] : ValueT(0);
+	}
+
 	const IndexOffsetSampler<0>& mOffsetSampler;
 	const ValueT* mData;
 };
@@ -95,25 +99,15 @@ class TrilinearSampler {
 	[[nodiscard]] __hostdev__ const IndexSampler<ValueT, 0>& Acc() const { return mNearestSampler; }
 
 	__hostdev__ void stencil(const nanovdb::Coord& ijk, ValueT (&v)[2][2][2]) const {
-		// ZYX order traversal (v[x][y][z])
-		const nanovdb::Coord c000(ijk[0], ijk[1], ijk[2]);
-		const nanovdb::Coord c001(ijk[0], ijk[1], ijk[2] + 1);
-		const nanovdb::Coord c010(ijk[0], ijk[1] + 1, ijk[2]);
-		const nanovdb::Coord c011(ijk[0], ijk[1] + 1, ijk[2] + 1);
-		const nanovdb::Coord c100(ijk[0] + 1, ijk[1], ijk[2]);
-		const nanovdb::Coord c101(ijk[0] + 1, ijk[1], ijk[2] + 1);
-		const nanovdb::Coord c110(ijk[0] + 1, ijk[1] + 1, ijk[2]);
-		const nanovdb::Coord c111(ijk[0] + 1, ijk[1] + 1, ijk[2] + 1);
-
 		// Gather values with direct coordinate access
-		v[0][0][0] = mNearestSampler(c000);
-		v[0][0][1] = mNearestSampler(c001);
-		v[0][1][0] = mNearestSampler(c010);
-		v[0][1][1] = mNearestSampler(c011);
-		v[1][0][0] = mNearestSampler(c100);
-		v[1][0][1] = mNearestSampler(c101);
-		v[1][1][0] = mNearestSampler(c110);
-		v[1][1][1] = mNearestSampler(c111);
+		v[0][0][0] = mNearestSampler(ijk[0], ijk[1], ijk[2]);
+		v[0][0][1] = mNearestSampler(ijk[0], ijk[1], ijk[2] + 1);
+		v[0][1][0] = mNearestSampler(ijk[0], ijk[1] + 1, ijk[2]);
+		v[0][1][1] = mNearestSampler(ijk[0], ijk[1] + 1, ijk[2] + 1);
+		v[1][0][0] = mNearestSampler(ijk[0] + 1, ijk[1], ijk[2]);
+		v[1][0][1] = mNearestSampler(ijk[0] + 1, ijk[1], ijk[2] + 1);
+		v[1][1][0] = mNearestSampler(ijk[0] + 1, ijk[1] + 1, ijk[2]);
+		v[1][1][1] = mNearestSampler(ijk[0] + 1, ijk[1] + 1, ijk[2] + 1);
 	}
 
 	// Changed sample from static to non-static so that it can call the stencil member function.

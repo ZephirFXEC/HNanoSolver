@@ -152,6 +152,7 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 	bool isSourced = !source_grids.empty();
 
 	if (isSourced) {
+		ScopedTimer timer("HNanoSolver::Sourcing");
 		for (const auto& grid : source_grids) {
 			if (auto float_grid = openvdb::gridPtrCast<openvdb::FloatGrid>(grid)) {
 				source_float_grids.push_back(float_grid);
@@ -159,10 +160,6 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 				source_vector_grids.push_back(vector_grid);
 			}
 		}
-	}
-
-
-	if (isSourced) {
 		for (int i = 0; i < source_float_grids.size(); ++i) {
 			auto& sourceG = source_float_grids[i];
 			auto& feedbackG = feedback_float_grids[i];
@@ -178,16 +175,9 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 
 	openvdb::FloatGrid::Ptr Domain = openvdb::FloatGrid::create();
 	{
-		ScopedTimer timer("Merging topology");
-		if (!feedback_vector_grids.empty()) {
-			Domain->topologyUnion(*feedback_vector_grids[0]);
-		} else {
-			for (const auto& grid : feedback_float_grids) {
-				Domain->topologyUnion(*grid);
-			}
-		}
+		ScopedTimer timer("HNanoSolver::MergeTopology");
+		Domain->topologyUnion(*feedback_vector_grids[0]);
 	}
-
 
 	HNS::GridIndexedData data;
 	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(Domain, &data);

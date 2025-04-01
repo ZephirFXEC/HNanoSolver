@@ -14,7 +14,7 @@ __global__ void advect_scalar(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __
 
 	const float scaled_dt = dt * inv_voxelSize;
 
-	const IndexOffsetSampler<0> idxSampler(*domainGrid);
+	const IndexOffsetSampler<0> idxSampler(domainGrid);
 	const auto velocitySampler = IndexSampler<nanovdb::Vec3f, 1>(idxSampler, velocityData);
 	const auto dataSampler = IndexSampler<float, 1>(idxSampler, inData);
 
@@ -36,7 +36,7 @@ __global__ void advect_scalar(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __
 	// Backward pass
 	// x_backward = x_forward + u(x_forward)*dt
 	// Then compare that to the original value
-	const nanovdb::Vec3f velF = velocitySampler(backPos);
+	const nanovdb::Vec3f& velF = velocitySampler(backPos);
 	const nanovdb::Vec3f fwdPos2 = backPos + velF * scaled_dt;
 	const float phiBackward = dataSampler(fwdPos2);
 
@@ -82,22 +82,22 @@ __global__ void advect_vector(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __
 
 	const float scaled_dt = dt * inv_voxelSize;
 
-	const IndexOffsetSampler<0> idxSampler(*domainGrid);
+	const IndexOffsetSampler<0> idxSampler(domainGrid);
 	const auto velocitySampler = IndexSampler<nanovdb::Vec3f, 1>(idxSampler, velocityData);
 
 	const nanovdb::Coord coord = coords[idx];
 	const nanovdb::Vec3f pos = coord.asVec3s();
 
 	// Original velocity at the cell or face
-	const nanovdb::Vec3f velOrig = velocitySampler(coord);
+	const nanovdb::Vec3f& velOrig = velocitySampler(coord);
 
 	// Forward pass (backtrace)
 	const nanovdb::Vec3f backPos = pos - velOrig * scaled_dt;
-	const nanovdb::Vec3f velForward = velocitySampler(backPos);
+	const nanovdb::Vec3f& velForward = velocitySampler(backPos);
 
 	// Backward check
 	const nanovdb::Vec3f fwdPos2 = backPos + velForward * scaled_dt;
-	const nanovdb::Vec3f velBackward = velocitySampler(fwdPos2);
+	const nanovdb::Vec3f& velBackward = velocitySampler(fwdPos2);
 
 	// Correction
 	const nanovdb::Vec3f errorVec = velOrig - velBackward;
@@ -141,8 +141,6 @@ __global__ void divergence_opt(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* d
                                float* outDivergence, const float inv_dx, const int numLeaves) {
 	// Block dimensions matching leaf size
 	constexpr int BLOCK_SIZE = 8;
-	__shared__ nanovdb::Vec3f s_vel[BLOCK_SIZE + 2][BLOCK_SIZE + 2][BLOCK_SIZE + 2];
-	const auto leafptr = domainGrid->tree().getFirstNode<0>();
 
 	const int leafIdx = blockIdx.x;
 	const int tidx = threadIdx.x;
@@ -151,44 +149,32 @@ __global__ void divergence_opt(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* d
 
 	if (leafIdx >= numLeaves) return;
 
-	const nanovdb::Coord origin = leafptr[leafIdx].origin();
+	const auto& leaf = domainGrid->tree().getFirstNode<0>()[leafIdx];
+	const nanovdb::Coord origin = leaf.origin();
 
-	const auto sampler = IndexOffsetSampler<0>(*domainGrid);
-	const auto velocitySampler = IndexSampler<nanovdb::Vec3f, 0>(sampler, velocityData);
+	const IndexOffsetSampler<0> idxSampler(domainGrid);
+	const auto velocitySampler = IndexSampler<nanovdb::Vec3f, 0>(idxSampler, velocityData);
 
-	for (int idx = tidz * BLOCK_SIZE * BLOCK_SIZE + tidy * BLOCK_SIZE + tidx; idx < (BLOCK_SIZE + 2) * (BLOCK_SIZE + 2) * (BLOCK_SIZE + 2);
-	     idx += BLOCK_SIZE * BLOCK_SIZE * BLOCK_SIZE) {
-		const int dz = idx / ((BLOCK_SIZE + 2) * (BLOCK_SIZE + 2));
-		const int dy = (idx % ((BLOCK_SIZE + 2) * (BLOCK_SIZE + 2))) / (BLOCK_SIZE + 2);
-		const int dx = idx % (BLOCK_SIZE + 2);
+	// Compute pressure gradient and update velocity
+	if (tidx < BLOCK_SIZE && tidy < BLOCK_SIZE && tidz < BLOCK_SIZE) {
+		const nanovdb::Coord coord = origin + nanovdb::Coord(tidx, tidy, tidz);
 
-		const nanovdb::Coord coord(origin.x() + dx - 1, origin.y() + dy - 1, origin.z() + dz - 1);
+		const nanovdb::Vec3f& current = velocitySampler(coord);
 
-		s_vel[dz][dy][dx] = velocitySampler(coord);
+		// Average neighboring velocities for each component
+		const float xp = 0.5f * (current[0] + velocitySampler(coord + nanovdb::Coord(1, 0, 0))[0]);
+		const float xm = 0.5f * (current[0] + velocitySampler(coord - nanovdb::Coord(1, 0, 0))[0]);
+
+		const float yp = 0.5f * (current[1] + velocitySampler(coord + nanovdb::Coord(0, 1, 0))[1]);
+		const float ym = 0.5f * (current[1] + velocitySampler(coord - nanovdb::Coord(0, 1, 0))[1]);
+
+		const float zp = 0.5f * (current[2] + velocitySampler(coord + nanovdb::Coord(0, 0, 1))[2]);
+		const float zm = 0.5f * (current[2] + velocitySampler(coord - nanovdb::Coord(0, 0, 1))[2]);
+
+		const float divergence = (xp - xm + yp - ym + zp - zm) * inv_dx;
+
+		outDivergence[idxSampler.offset(coord)] = divergence;
 	}
-
-	__syncthreads();
-
-	const int lx = tidx + 1;
-	const int ly = tidy + 1;
-	const int lz = tidz + 1;
-
-	// Load current cell's velocity
-	const nanovdb::Vec3f current = s_vel[lz][ly][lx];
-
-	// Average neighboring velocities for each component
-	const float xp = 0.5f * (current[0] + s_vel[lz][ly][lx + 1][0]);
-	const float xm = 0.5f * (current[0] + s_vel[lz][ly][lx - 1][0]);
-
-	const float yp = 0.5f * (current[1] + s_vel[lz][ly + 1][lx][1]);
-	const float ym = 0.5f * (current[1] + s_vel[lz][ly - 1][lx][1]);
-
-	const float zp = 0.5f * (current[2] + s_vel[lz + 1][ly][lx][2]);
-	const float zm = 0.5f * (current[2] + s_vel[lz - 1][ly][lx][2]);
-
-	const float divergence = (xp - xm + yp - ym + zp - zm) * inv_dx;
-
-	outDivergence[sampler.offset(origin + nanovdb::Coord(tidx, tidy, tidz))] = divergence;
 }
 
 
@@ -201,7 +187,7 @@ __global__ void divergence(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __res
 	const nanovdb::Vec3f center = velocityData[tid];
 
 	const nanovdb::Coord c = d_coord[tid];
-	const IndexOffsetSampler<0> idxSampler(*domainGrid);
+	const IndexOffsetSampler<0> idxSampler(domainGrid);
 	const auto velocitySampler = IndexSampler<nanovdb::Vec3f, 0>(idxSampler, velocityData);
 
 	const float xp = (center + velocitySampler(c + nanovdb::Coord(1, 0, 0)))[0] * 0.5f;
@@ -214,30 +200,25 @@ __global__ void divergence(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __res
 	outDivergence[tid] = (xp - xm + yp - ym + zp - zm) * inv_dx;
 }
 
-__global__ void redBlackGaussSeidelUpdate_opt(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __restrict__ domainGrid,
-                                              const float* __restrict__ d_divergence, float* __restrict__ d_pressure, float voxelSize,
-                                              int numLeaves, int color, float omega) {
+__global__ void redBlackGaussSeidelUpdate_opt(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid, const float* divergence,
+                                              float* pressure, const float dx, const size_t totalVoxels, const int color,
+                                              const float omega) {
 	constexpr int BLOCK_SIZE = 8;
 	__shared__ float s_pressure[BLOCK_SIZE + 2][BLOCK_SIZE + 2][BLOCK_SIZE + 2];
 
-
-	// Which leaf block am I?
 	const int leafIdx = blockIdx.x;
-	if (leafIdx >= numLeaves) return;
+	const int tidx = threadIdx.x;
+	const int tidy = threadIdx.y;
+	const int tidz = threadIdx.z;
+
+	if (leafIdx >= domainGrid->tree().nodeCount(0)) return;
 
 	const auto& leaf = domainGrid->tree().getFirstNode<0>()[leafIdx];
 	const nanovdb::Coord origin = leaf.origin();
+	const IndexOffsetSampler<0> idxSampler(domainGrid);
+	const auto pSampler = IndexSampler<float, 0>(idxSampler, pressure);
 
-	const IndexOffsetSampler<0> idxSampler(*domainGrid);
-	const auto divSampler = IndexSampler<float, 0>(idxSampler, d_divergence);
-	const auto pSampler = IndexSampler<float, 0>(idxSampler, d_pressure);
-
-	// Thread indices
-	const int tidz = threadIdx.x;
-	const int tidy = threadIdx.y;
-	const int tidx = threadIdx.z;
-
-
+	// Load pressure halo (+1 in all directions)
 	for (int idx = tidz * BLOCK_SIZE * BLOCK_SIZE + tidy * BLOCK_SIZE + tidx; idx < (BLOCK_SIZE + 2) * (BLOCK_SIZE + 2) * (BLOCK_SIZE + 2);
 	     idx += BLOCK_SIZE * BLOCK_SIZE * BLOCK_SIZE) {
 		const int dz = idx / ((BLOCK_SIZE + 2) * (BLOCK_SIZE + 2));
@@ -245,38 +226,44 @@ __global__ void redBlackGaussSeidelUpdate_opt(const nanovdb::NanoGrid<nanovdb::V
 		const int dx = idx % (BLOCK_SIZE + 2);
 
 		const nanovdb::Coord coord(origin.x() + dx - 1, origin.y() + dy - 1, origin.z() + dz - 1);
-
 		s_pressure[dz][dy][dx] = pSampler(coord);
 	}
 
-
-	if (((tidx + tidy + tidx) & 1) != color) return;
-
-
 	__syncthreads();
 
+	// Process center region
 	if (tidx < BLOCK_SIZE && tidy < BLOCK_SIZE && tidz < BLOCK_SIZE) {
+		const nanovdb::Coord coord = origin + nanovdb::Coord(tidx, tidy, tidz);
+		const int i = coord.x(), j = coord.y(), k = coord.z();
+
+		// Red/black check
+		if (((i + j + k) & 1) != color) return;
+
+		// Find linear index in d_coord array
+		const size_t tid = idxSampler.offset(coord);
+		if (tid >= totalVoxels) return;
+
+		// Shared memory indices with halo offset
 		const int lx = tidx + 1;
 		const int ly = tidy + 1;
 		const int lz = tidz + 1;
 
-		// Pre-compute common factors
-		const float dx2 = voxelSize * voxelSize;
-		constexpr float inv6 = 0.166666667;
+		// Stencil accesses from shared memory
+		const float pxp1 = s_pressure[lz][ly][lx + 1];
+		const float pxm1 = s_pressure[lz][ly][lx - 1];
+		const float pyp1 = s_pressure[lz][ly + 1][lx];
+		const float pym1 = s_pressure[lz][ly - 1][lx];
+		const float pzp1 = s_pressure[lz + 1][ly][lx];
+		const float pzm1 = s_pressure[lz - 1][ly][lx];
 
-		const nanovdb::Coord c = origin + nanovdb::Coord(tidx, tidy, tidz);
-		const float divVal = divSampler(c);
-		const float pOld = pSampler(c);
-
-		const float pxp1 = s_pressure[lz][ly][tidx + 1];
-		const float pxm1 = s_pressure[lz][ly][tidx];
-		const float pyp1 = s_pressure[lz][tidy + 1][lx];
-		const float pym1 = s_pressure[lz][tidy][lx];
-		const float pzp1 = s_pressure[tidz + 1][ly][lx];
-		const float pzm1 = s_pressure[tidz][ly][lx];
+		// Gauss-Seidel update
+		const float dx2 = dx * dx;
+		constexpr float inv6 = 0.166666667f;
+		const float divVal = divergence[tid];
+		const float pOld = s_pressure[lz][ly][lx];  // From shared memory
 
 		const float pGS = ((pxp1 + pxm1 + pyp1 + pym1 + pzp1 + pzm1) - divVal * dx2) * inv6;
-		d_pressure[idxSampler.offset(c)] = pOld + omega * (pGS - pOld);
+		pressure[tid] = pOld + omega * (pGS - pOld);
 	}
 }
 
@@ -294,7 +281,7 @@ __global__ void redBlackGaussSeidelUpdate(const nanovdb::NanoGrid<nanovdb::Value
 	// Skip if wrong color
 	if (((i + j + k) & 1) != color) return;
 
-	const IndexOffsetSampler<0> idxSampler(*domainGrid);
+	const IndexOffsetSampler<0> idxSampler(domainGrid);
 	const auto pSampler = IndexSampler<float, 0>(idxSampler, pressure);
 
 	// Pre-compute common factors
@@ -313,6 +300,41 @@ __global__ void redBlackGaussSeidelUpdate(const nanovdb::NanoGrid<nanovdb::Value
 
 	const float pGS = ((pxp1 + pxm1 + pyp1 + pym1 + pzp1 + pzm1) - divVal * dx2) * inv6;
 	pressure[tid] = pOld + omega * (pGS - pOld);
+}
+
+__global__ void restrict_to_4x4x4(const float* inData, float* outData, const size_t totalVoxels) {
+	// totalVoxels should be 64 (for a 4x4x4 coarse grid)
+	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+	if (tid >= totalVoxels) return;
+
+	// Map tid [0,63] to coarse grid coordinates in a 4x4x4 block:
+	const int ic = tid % 4;
+	const int jc = (tid / 4) % 4;
+	const int kc = tid / 16;
+
+	// Each coarse cell covers a 2x2x2 block in the fine grid.
+	// Fine grid is 8x8x8; compute starting indices for the corresponding block.
+	const int i_fine_start = ic * 2;
+	const int j_fine_start = jc * 2;
+	const int k_fine_start = kc * 2;
+
+	float sum = 0.0f;
+	// Loop over the 2x2x2 block
+	for (int dz = 0; dz < 2; ++dz) {
+		for (int dy = 0; dy < 2; ++dy) {
+			for (int dx = 0; dx < 2; ++dx) {
+				int i_fine = i_fine_start + dx;
+				int j_fine = j_fine_start + dy;
+				int k_fine = k_fine_start + dz;
+				// Assuming fine grid is stored in x-fastest order:
+				// Index = i + j * (8) + k * (8*8) where grid dimensions are 8×8×8.
+				const int index = i_fine + j_fine * 8 + k_fine * 64;
+				sum += inData[index];
+			}
+		}
+	}
+	// Average the sum of 8 fine cells
+	outData[tid] = sum / 8.0f;
 }
 
 
@@ -353,7 +375,6 @@ __global__ void subtractPressureGradient_opt(const nanovdb::NanoGrid<nanovdb::Va
                                              const nanovdb::Vec3f* __restrict__ velocity, const float* __restrict__ pressure,
                                              nanovdb::Vec3f* __restrict__ out, const float inv_voxelSize, const size_t numLeaves) {
 	constexpr int BLOCK_SIZE = 8;
-	__shared__ nanovdb::Vec3f s_vel[BLOCK_SIZE + 2][BLOCK_SIZE + 2][BLOCK_SIZE + 2];
 	__shared__ float s_pressure[BLOCK_SIZE + 2][BLOCK_SIZE + 2][BLOCK_SIZE + 2];
 
 	const int leafIdx = blockIdx.x;
@@ -366,7 +387,7 @@ __global__ void subtractPressureGradient_opt(const nanovdb::NanoGrid<nanovdb::Va
 	const auto& leaf = domainGrid->tree().getFirstNode<0>()[leafIdx];
 	const nanovdb::Coord origin = leaf.origin();
 
-	const IndexOffsetSampler<0> idxSampler(*domainGrid);
+	const IndexOffsetSampler<0> idxSampler(domainGrid);
 	const auto velocitySampler = IndexSampler<nanovdb::Vec3f, 0>(idxSampler, velocity);
 	const auto pressureSampler = IndexSampler<float, 0>(idxSampler, pressure);
 
@@ -377,8 +398,6 @@ __global__ void subtractPressureGradient_opt(const nanovdb::NanoGrid<nanovdb::Va
 		const int dx = idx % (BLOCK_SIZE + 2);
 
 		const nanovdb::Coord coord(origin.x() + dx - 1, origin.y() + dy - 1, origin.z() + dz - 1);
-
-		s_vel[dz][dy][dx] = velocitySampler(coord);
 		s_pressure[dz][dy][dx] = pressureSampler(coord);
 	}
 
@@ -389,8 +408,10 @@ __global__ void subtractPressureGradient_opt(const nanovdb::NanoGrid<nanovdb::Va
 		const int ly = tidy + 1;
 		const int lz = tidz + 1;
 
+		const nanovdb::Coord coord = origin + nanovdb::Coord(tidx, tidy, tidz);
+
 		// Load current cell's
-		const nanovdb::Vec3f u_star_c = s_vel[lz][ly][lx];
+		const nanovdb::Vec3f& u_star_c = velocitySampler(coord);
 
 		// Pressure values at neighbours
 		const float p_xp = s_pressure[lz][ly][lx + 1];  // p(i+1, j, k)
@@ -415,7 +436,7 @@ __global__ void subtractPressureGradient_opt(const nanovdb::NanoGrid<nanovdb::Va
 		const nanovdb::Vec3f u_final_c = u_star_c - gradP_c;
 
 
-		out[idxSampler.offset(origin + nanovdb::Coord(tidx, tidy, tidz))] = u_final_c;
+		out[idxSampler.offset(coord)] = u_final_c;
 	}
 }
 
@@ -427,14 +448,14 @@ __global__ void subtractPressureGradient(const nanovdb::NanoGrid<nanovdb::ValueO
 	if (tid >= totalVoxels) return;
 
 	// Samplers
-	const IndexOffsetSampler<0> idxSampler(*domainGrid);
+	const IndexOffsetSampler<0> idxSampler(domainGrid);
 	const auto pressureSampler = IndexSampler<float, 0>(idxSampler, pressure);
 
 	// The cell center coordinate associated with this thread
-	const nanovdb::Coord c = d_coords[tid];
+	const nanovdb::Coord& c = d_coords[tid];
 
 	// Get the intermediate cell-centered velocity u*
-	const nanovdb::Vec3f u_star_c = velocity[tid];
+	const nanovdb::Vec3f& u_star_c = velocity[tid];
 
 	// --- Calculate Pressure Gradient at Cell Center (i, j, k) using Central Differences ---
 
@@ -456,7 +477,7 @@ __global__ void subtractPressureGradient(const nanovdb::NanoGrid<nanovdb::ValueO
 	const nanovdb::Vec3f gradP_c = {gradP_x, gradP_y, gradP_z};
 
 	// --- Apply Pressure Gradient ---
-	// u_n+1 = u* - dt * grad(p)  (Assuming rho=1)
+	// u_n+1 = u* - dt * grad(p)
 	// Apply the update using the time step dt
 	const nanovdb::Vec3f u_final_c = u_star_c - gradP_c;
 
@@ -479,13 +500,9 @@ __global__ void temperature_buoyancy(const nanovdb::NanoGrid<nanovdb::ValueOnInd
                                      float ambient_temp, float buoyancy_strength, size_t totalVoxels) {
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= totalVoxels) return;
-	const IndexOffsetSampler<0> sampler(*domainGrid);
-	const auto tempSampler = IndexSampler<float, 0>(sampler, tempData);
-	const auto velSampler = IndexSampler<nanovdb::Vec3f, 0>(sampler, velocityData);
 
-	const auto vel = velSampler(d_coords[idx]);
-
-	const float temp = tempSampler(d_coords[idx]);
+	const nanovdb::Vec3f& vel = velocityData[idx];
+	const float temp = tempData[idx];
 	if (temp <= ambient_temp) {
 		outVel[idx] = vel;
 		return;
@@ -504,13 +521,9 @@ __global__ void combustion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domai
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= totalVoxels) return;
 
-	const IndexOffsetSampler<0> sampler(*domainGrid);
-	const auto tempSampler = IndexSampler<float, 0>(sampler, tempData);
-	const auto fuelSampler = IndexSampler<float, 0>(sampler, fuelData);
 
-
-	const float fuel = fuelSampler(d_coords[idx]);
-	const float temp = tempSampler(d_coords[idx]);
+	const float fuel = fuelData[idx];
+	const float temp = tempData[idx];
 	float newFuel = fuel;
 	float newTemp = temp;
 
@@ -531,12 +544,13 @@ __global__ void diffusion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domain
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= totalVoxels) return;
 
-	const IndexOffsetSampler<0> sampler(*domainGrid);
+	const IndexOffsetSampler<0> sampler(domainGrid);
 	const auto tempSampler = IndexSampler<float, 0>(sampler, tempData);
 	const auto fuelSampler = IndexSampler<float, 0>(sampler, fuelData);
 
-	const float centerTemp = tempSampler(d_coords[idx]);
-	const float centerFuel = fuelSampler(d_coords[idx]);
+	const nanovdb::Coord& coord = d_coords[idx];
+	const float centerTemp = tempSampler(coord);
+	const float centerFuel = fuelSampler(coord);
 	float tempLaplacian = 0.0f;
 	float fuelLaplacian = 0.0f;
 	int neighbors = 0;
@@ -545,11 +559,14 @@ __global__ void diffusion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domain
 	nanovdb::Coord offsets[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
 
 	for (auto offset : offsets) {
-		const nanovdb::Coord neighborCoord = d_coords[idx] + offset;
+		const nanovdb::Coord neighborCoord = coord + offset;
 
 		// Get the neighbor's index and values
 		const float neighborTemp = tempSampler(neighborCoord);
+		if (neighborTemp == 0.0f) continue;  // Skip inactive voxels
+
 		const float neighborFuel = fuelSampler(neighborCoord);
+		if (neighborFuel == 0.0f) continue;  // Skip inactive voxels
 
 		// Accumulate Laplacian (difference from center to neighbor)
 		tempLaplacian += (neighborTemp - centerTemp);
