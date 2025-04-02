@@ -630,3 +630,63 @@ __global__ void combustion_oxygen(const float* fuelData, const float* wasteData,
 	divergenceData[idx] += burn * expansion;
 	outFlame[idx] = newFlame;
 }
+
+
+// Vorticity Confinement Kernel
+__global__ void vorticityConfinement(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __restrict__ domainGrid,
+                                     const nanovdb::Coord* __restrict__ d_coord, const nanovdb::Vec3f* __restrict__ velocityData,
+                                     nanovdb::Vec3f* __restrict__ outForce, const float dt, const float inv_dx,
+                                     const float confinementScale, const size_t totalVoxels) {
+	const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+	if (tid >= totalVoxels) return;
+
+	const nanovdb::Coord c = d_coord[tid];
+
+	// Initialize sampler with boundary checks
+	const IndexOffsetSampler<0> idxSampler(domainGrid);
+	const auto velocitySampler = IndexSampler<nanovdb::Vec3f, 0>(idxSampler, velocityData);
+	const float factor = 0.5f * inv_dx;
+
+	// Compute current cell's vorticity vector
+	const nanovdb::Vec3f u_pX = velocitySampler(c + nanovdb::Coord(1, 0, 0));
+	const nanovdb::Vec3f u_mX = velocitySampler(c - nanovdb::Coord(1, 0, 0));
+	const nanovdb::Vec3f u_pY = velocitySampler(c + nanovdb::Coord(0, 1, 0));
+	const nanovdb::Vec3f u_mY = velocitySampler(c - nanovdb::Coord(0, 1, 0));
+	const nanovdb::Vec3f u_pZ = velocitySampler(c + nanovdb::Coord(0, 0, 1));
+	const nanovdb::Vec3f u_mZ = velocitySampler(c - nanovdb::Coord(0, 0, 1));
+
+	const float omega_x = ((u_pY[2] - u_mY[2]) - (u_pZ[1] - u_mZ[1])) * factor;
+	const float omega_y = ((u_pZ[0] - u_mZ[0]) - (u_pX[2] - u_mX[2])) * factor;
+	const float omega_z = ((u_pX[1] - u_mX[1]) - (u_pY[0] - u_mY[0])) * factor;
+
+	// Compute vorticity magnitude at neighbors using pre-checked coordinates
+
+	// X-direction neighbors
+	const float vortMag_pX = computeVorticityMag(velocitySampler, c + nanovdb::Coord(1, 0, 0), factor);
+	const float vortMag_mX = computeVorticityMag(velocitySampler, c - nanovdb::Coord(1, 0, 0), factor);
+
+	// Y-direction neighbors
+	const float vortMag_pY = computeVorticityMag(velocitySampler, c + nanovdb::Coord(0, 1, 0), factor);
+	const float vortMag_mY = computeVorticityMag(velocitySampler, c - nanovdb::Coord(0, 1, 0), factor);
+
+	// Z-direction neighbors
+	const float vortMag_pZ = computeVorticityMag(velocitySampler, c + nanovdb::Coord(0, 0, 1), factor);
+	const float vortMag_mZ = computeVorticityMag(velocitySampler, c - nanovdb::Coord(0, 0, 1), factor);
+
+	// Compute gradient with safe differences
+	const float grad_x = (vortMag_pX - vortMag_mX) * 0.5f * inv_dx;
+	const float grad_y = (vortMag_pY - vortMag_mY) * 0.5f * inv_dx;
+	const float grad_z = (vortMag_pZ - vortMag_mZ) * 0.5f * inv_dx;
+
+	// Normalize gradient vector
+	const float gradLen = sqrtf(grad_x * grad_x + grad_y * grad_y + grad_z * grad_z) + 1e-5f;
+	const float Nx = grad_x / gradLen;
+	const float Ny = grad_y / gradLen;
+	const float Nz = grad_z / gradLen;
+
+	// Compute confinement force using cross product
+	outForce[tid] = velocityData[tid] + nanovdb::Vec3f{confinementScale * (Ny * omega_z - Nz * omega_y),
+	                                                   confinementScale * (Nz * omega_x - Nx * omega_z),
+	                                                   confinementScale * (Nx * omega_y - Ny * omega_x)} *
+	                                        dt;
+}

@@ -63,6 +63,13 @@ const char* const SOP_HNanoSolverVerb::theDsFile = R"THEDSFILE(
 		size 1
 		default { "23.0" }
 	}
+	parm {
+		name "vorticity"
+		label "Vorticity Scale"
+		type float
+		size 1
+		default { "1" }
+	}
 }
 )THEDSFILE";
 
@@ -200,6 +207,7 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 		params.temperatureRelease = sopparms.getTemperature_gain();
 		params.buoyancyStrength = sopparms.getBuoyancy_strength();
 		params.ambientTemp = sopparms.getAmbient_temp();
+		params.vortictyScale = sopparms.getVorticity();
 
 		Compute_Sim(data, handle, iterations, deltaTime, primaryVelocityGrid->voxelSize()[0], params, stream);
 	}

@@ -136,6 +136,12 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 		CUDA_CHECK(cudaGetLastError());  // Check for kernel launch errors
 	}
 
+	{
+		ScopedTimerGPU timer("HNanoSolver::VorticityConfinement", 12 * 43, totalVoxels);
+		vorticityConfinement<<<gridSize, blockSize, 0, stream>>>(gpuGridPtr, d_coords.get(), d_advectedVel.get(), d_advectedVel.get(), dt,
+		                                                         inv_voxelSize, params.vortictyScale, totalVoxels);
+	}
+
 	// Step 2: Calculate velocity field divergence
 	// Input: d_velocity (using original velocity for divergence, common practice), d_coords
 	// Output: d_divergence
@@ -170,7 +176,7 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 		// Input: d_inputs[...], d_divergence (read/write)
 		// Output: d_outputs[...]
 		{
-			ScopedTimerGPU t("HNanoSolver::Combustion::Combust", 4 * 16 + 12, totalVoxels);
+			ScopedTimerGPU t("HNanoSolver::Combustion::Combust", 4 * 9, totalVoxels);
 			combustion_oxygen<<<gridSize, blockSize, 0, stream>>>(
 			    d_inputs.at("fuel").get(), d_inputs.at("waste").get(), d_inputs.at("temperature").get(),
 			    d_divergence.get(),  // Input/Output - combustion adds expansion
@@ -266,8 +272,8 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 			                                                  d_inputs.at(name).get(),   // Scalar field state before advection
 			                                                  d_outputs.at(name).get(),  // Write advected result here
 			                                                  totalVoxels, dt, inv_voxelSize);
-			CUDA_CHECK(cudaGetLastError());  // Check each kernel launch
 		}
+		CUDA_CHECK(cudaGetLastError());  // Check each kernel launch
 	}
 
 

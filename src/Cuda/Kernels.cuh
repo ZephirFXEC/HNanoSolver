@@ -8,6 +8,7 @@ struct CombustionParams {
 	float temperatureRelease;
 	float buoyancyStrength;
 	float ambientTemp;
+	float vortictyScale;
 };
 
 __global__ void advect_scalar(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __restrict__ domainGrid,
@@ -72,3 +73,8 @@ __global__ void diffusion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domain
 __global__ void combustion_oxygen(const float* fuelData, const float* wasteData, const float* temperatureData, float* divergenceData,
                                   const float* flameData, float* outFuel, float* outWaste, float* outTemperature, float* outFlame,
                                   float temp_gain, float expansion, size_t totalVoxels);
+
+__global__ void vorticityConfinement(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __restrict__ domainGrid,
+                                     const nanovdb::Coord* __restrict__ d_coord, const nanovdb::Vec3f* __restrict__ velocityData,
+                                     nanovdb::Vec3f* __restrict__ outForce, float dt, float inv_dx, float confinementScale,
+                                     size_t totalVoxels);

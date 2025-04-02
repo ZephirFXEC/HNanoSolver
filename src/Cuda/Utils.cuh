@@ -222,6 +222,27 @@ __device__ nanovdb::Vec3f rk3_integrate(const VelocitySampler& sampler, nanovdb:
 }
 
 
+// Helper device function to compute vorticity magnitude at a given coordinate.
+inline __device__ float computeVorticityMag(const IndexSampler<nanovdb::Vec3f, 0>& sampler, const nanovdb::Coord c,
+                                     const float factor)  // factor = 0.5f * inv_dx
+{
+	// Sample neighboring velocities.
+	nanovdb::Vec3f u_pX = sampler(c + nanovdb::Coord(1, 0, 0));
+	nanovdb::Vec3f u_mX = sampler(c - nanovdb::Coord(1, 0, 0));
+	nanovdb::Vec3f u_pY = sampler(c + nanovdb::Coord(0, 1, 0));
+	nanovdb::Vec3f u_mY = sampler(c - nanovdb::Coord(0, 1, 0));
+	nanovdb::Vec3f u_pZ = sampler(c + nanovdb::Coord(0, 0, 1));
+	nanovdb::Vec3f u_mZ = sampler(c - nanovdb::Coord(0, 0, 1));
+
+	// Compute partial derivatives (central difference).
+	const float omega_x = ((u_pY[2] - u_mY[2]) - (u_pZ[1] - u_mZ[1])) * factor;
+	const float omega_y = ((u_pZ[0] - u_mZ[0]) - (u_pX[2] - u_mX[2])) * factor;
+	const float omega_z = ((u_pX[1] - u_mX[1]) - (u_pY[0] - u_mY[0])) * factor;
+
+	return sqrtf(omega_x * omega_x + omega_y * omega_y + omega_z * omega_z);
+}
+
+
 class ScopedTimerGPU {
    public:
 	explicit ScopedTimerGPU(const std::string& name) : name_(name), bytes(0), voxels(0) {

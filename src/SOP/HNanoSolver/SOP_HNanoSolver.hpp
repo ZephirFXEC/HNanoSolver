@@ -23,6 +23,7 @@ struct CombustionParams {
 	float temperatureRelease;
 	float buoyancyStrength;
 	float ambientTemp;
+	float vortictyScale;
 };
 
 class SOP_HNanoSolver final : public SOP_Node {
