@@ -21,7 +21,7 @@ __global__ void advect_scalar(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __
 	// The cell coordinate
 	const nanovdb::Coord coord = coords[idx];
 	const nanovdb::Vec3f posCell = coord.asVec3s();
-	const float phiOrig = inData[idx];
+	const float phiOrig = dataSampler(coord);
 
 	// MAC Velocity for backtrace
 	const nanovdb::Vec3f velCenter = velocitySampler(coord);
@@ -36,7 +36,7 @@ __global__ void advect_scalar(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __
 	// Backward pass
 	// x_backward = x_forward + u(x_forward)*dt
 	// Then compare that to the original value
-	const nanovdb::Vec3f& velF = velocitySampler(backPos);
+	const nanovdb::Vec3f velF = velocitySampler(backPos);
 	const nanovdb::Vec3f fwdPos2 = backPos + velF * scaled_dt;
 	const float phiBackward = dataSampler(fwdPos2);
 
@@ -89,15 +89,15 @@ __global__ void advect_vector(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* __
 	const nanovdb::Vec3f pos = coord.asVec3s();
 
 	// Original velocity at the cell or face
-	const nanovdb::Vec3f& velOrig = velocitySampler(coord);
+	const nanovdb::Vec3f velOrig = velocitySampler(coord);
 
 	// Forward pass (backtrace)
 	const nanovdb::Vec3f backPos = pos - velOrig * scaled_dt;
-	const nanovdb::Vec3f& velForward = velocitySampler(backPos);
+	const nanovdb::Vec3f velForward = velocitySampler(backPos);
 
 	// Backward check
 	const nanovdb::Vec3f fwdPos2 = backPos + velForward * scaled_dt;
-	const nanovdb::Vec3f& velBackward = velocitySampler(fwdPos2);
+	const nanovdb::Vec3f velBackward = velocitySampler(fwdPos2);
 
 	// Correction
 	const nanovdb::Vec3f errorVec = velOrig - velBackward;
@@ -159,7 +159,7 @@ __global__ void divergence_opt(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* d
 	if (tidx < BLOCK_SIZE && tidy < BLOCK_SIZE && tidz < BLOCK_SIZE) {
 		const nanovdb::Coord coord = origin + nanovdb::Coord(tidx, tidy, tidz);
 
-		const nanovdb::Vec3f& current = velocitySampler(coord);
+		const nanovdb::Vec3f current = velocitySampler(coord);
 
 		// Average neighboring velocities for each component
 		const float xp = 0.5f * (current[0] + velocitySampler(coord + nanovdb::Coord(1, 0, 0))[0]);
@@ -452,10 +452,10 @@ __global__ void subtractPressureGradient(const nanovdb::NanoGrid<nanovdb::ValueO
 	const auto pressureSampler = IndexSampler<float, 0>(idxSampler, pressure);
 
 	// The cell center coordinate associated with this thread
-	const nanovdb::Coord& c = d_coords[tid];
+	const nanovdb::Coord c = d_coords[tid];
 
 	// Get the intermediate cell-centered velocity u*
-	const nanovdb::Vec3f& u_star_c = velocity[tid];
+	const nanovdb::Vec3f u_star_c = velocity[tid];
 
 	// --- Calculate Pressure Gradient at Cell Center (i, j, k) using Central Differences ---
 
@@ -494,14 +494,12 @@ __global__ void subtractPressureGradient(const nanovdb::NanoGrid<nanovdb::ValueO
 }
 
 
-__global__ void temperature_buoyancy(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domainGrid,
-                                     const nanovdb::Coord* __restrict__ d_coords, const nanovdb::Vec3f* __restrict__ velocityData,
-                                     const float* __restrict__ tempData, nanovdb::Vec3f* __restrict__ outVel, const float dt,
-                                     float ambient_temp, float buoyancy_strength, size_t totalVoxels) {
+__global__ void temperature_buoyancy(const nanovdb::Vec3f* velocityData, const float* tempData, nanovdb::Vec3f* outVel, const float dt,
+                                     const float ambient_temp, const float buoyancy_strength, const size_t totalVoxels) {
 	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= totalVoxels) return;
 
-	const nanovdb::Vec3f& vel = velocityData[idx];
+	const nanovdb::Vec3f vel = velocityData[idx];
 	const float temp = tempData[idx];
 	if (temp <= ambient_temp) {
 		outVel[idx] = vel;
@@ -548,7 +546,7 @@ __global__ void diffusion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domain
 	const auto tempSampler = IndexSampler<float, 0>(sampler, tempData);
 	const auto fuelSampler = IndexSampler<float, 0>(sampler, fuelData);
 
-	const nanovdb::Coord& coord = d_coords[idx];
+	const nanovdb::Coord coord = d_coords[idx];
 	const float centerTemp = tempSampler(coord);
 	const float centerFuel = fuelSampler(coord);
 	float tempLaplacian = 0.0f;
@@ -585,4 +583,50 @@ __global__ void diffusion(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* domain
 
 	// Apply cooling effect
 	outTemp[idx] += (ambient_temp - outTemp[idx]) * dt * 0.1f;
+}
+
+
+__global__ void combustion_oxygen(const float* fuelData, const float* wasteData, const float* temperatureData, float* divergenceData,
+                                  const float* flameData, float* outFuel, float* outWaste, float* outTemperature, float* outFlame,
+                                  const float temp_gain, const float expansion, size_t totalVoxels) {
+	const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= totalVoxels) return;
+
+	// Load input values for the current voxel
+	float fuel = fuelData[idx];
+	float waste = wasteData[idx];
+	float temperature = temperatureData[idx];
+	float flame = flameData[idx];
+
+	// Apply fuel threshold
+	if (fuel < 0.001f) {
+		fuel = 0.0f;
+	}
+
+	// Calculate available oxygen
+	float oxygen = 1.0f - fuel - waste;
+	if (oxygen < 0.0f) {
+		// Invalid state; copy inputs to outputs
+		outFuel[idx] = fuel;
+		outWaste[idx] = waste;
+		outTemperature[idx] = temperature;
+		outFlame[idx] = flame;
+		return;
+	}
+
+	// Calculate burn amount (oxygen-limited, scaled by ratio)
+	float burn = fminf(oxygen, fuel);
+
+	// Update fields
+	float newFuel = fuel - burn;
+	float newWaste = waste + burn * 2.0f;                      // Fuel + oxygen consumed
+	float newFlame = fmaxf(flame, fminf(1.0f, burn * 10.0f));  // Flame intensity
+	float newTemperature = temperature + burn * temp_gain;
+
+	// Write updated values to output arrays
+	outFuel[idx] = newFuel;
+	outWaste[idx] = newWaste;
+	outTemperature[idx] = newTemperature;
+	divergenceData[idx] += burn * expansion;
+	outFlame[idx] = newFlame;
 }

@@ -1,8 +1,22 @@
 #pragma once
 
+#include <stdexcept>
+#include <string>
+
 #include "../Utils/Stencils.hpp"
-#include "nanovdb/NanoVDB.h"
 #include "nanovdb/math/SampleFromVoxels.h"
+
+// --- Helper Macro/Function for CUDA Error Checking ---
+#define CUDA_CHECK(call)                                                                                                 \
+	do {                                                                                                                 \
+		cudaError_t err = call;                                                                                          \
+		if (err != cudaSuccess) {                                                                                        \
+			fprintf(stderr, "CUDA Error in %s at line %d: %s (%d)\n", __FILE__, __LINE__, cudaGetErrorString(err), err); \
+			/* Optionally throw an exception */                                                                          \
+			throw std::runtime_error("CUDA error: " + std::string(cudaGetErrorString(err)));                             \
+		}                                                                                                                \
+	} while (0)
+
 
 template <typename T>
 __device__ T lerp(T v0, T v1, T t) {
@@ -239,4 +253,60 @@ class ScopedTimerGPU {
 	const size_t voxels;
 	cudaEvent_t start{};
 	cudaEvent_t stop{};
+};
+
+
+template <typename T>
+struct DeviceMemory {
+	T* ptr = nullptr;
+	size_t count = 0;
+	cudaStream_t stream_ = nullptr;  // Store stream for async free
+
+	DeviceMemory() = default;  // Default constructor needed for map operations
+
+	DeviceMemory(size_t num_elements, cudaStream_t stream) : count(num_elements), stream_(stream) {
+		if (count > 0) {
+			CUDA_CHECK(cudaMallocAsync(&ptr, count * sizeof(T), stream_));
+		}
+	}
+
+	// Disable copy constructor and assignment
+	DeviceMemory(const DeviceMemory&) = delete;
+	DeviceMemory& operator=(const DeviceMemory&) = delete;
+
+	// Move constructor
+	DeviceMemory(DeviceMemory&& other) noexcept : ptr(other.ptr), count(other.count), stream_(other.stream_) {
+		other.ptr = nullptr;
+		other.count = 0;
+	}
+
+	// Move assignment
+	DeviceMemory& operator=(DeviceMemory&& other) noexcept {
+		if (this != &other) {
+			// Free existing resource if any
+			if (ptr) {
+				// Queue the free operation on the associated stream
+				cudaFreeAsync(ptr, stream_);
+				// Note: No CUDA_CHECK in destructor/move assignment free path. Log errors if needed.
+			}
+			// Transfer ownership
+			ptr = other.ptr;
+			count = other.count;
+			stream_ = other.stream_;
+			// Nullify the source object
+			other.ptr = nullptr;
+			other.count = 0;
+		}
+		return *this;
+	}
+
+	~DeviceMemory() {
+		if (ptr) {
+			cudaFreeAsync(ptr, stream_);
+		}
+	}
+
+	T* get() const { return ptr; }
+	size_t size() const { return count; }
+	size_t bytes() const { return count * sizeof(T); }
 };

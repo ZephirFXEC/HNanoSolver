@@ -29,13 +29,6 @@ const char* const SOP_HNanoSolverVerb::theDsFile = R"THEDSFILE(
         default { "1/$FPS" }
     }
 	parm {
-		name "voxelsize"
-		label "Voxel Size"
-        type    float
-        size    1
-        default { "0.5" }
-	}
-	parm {
 		name "iterations"
 		label "Pressure Projection"
         type    integer
@@ -43,18 +36,18 @@ const char* const SOP_HNanoSolverVerb::theDsFile = R"THEDSFILE(
         range   { 1! 100 }
 	}
 	parm {
-		name "combustion_rate"
-		label "Combustion Rate"
+		name "expansion_rate"
+		label "Expansion Rate"
 		type float
 		size 1
 		default { "0.1" }
 	}
 	parm {
-		name "heat_release"
-		label "Heat Release"
+		name "temperature_gain"
+		label "Temperature Gain"
 		type float
 		size 1
-		default { "10.0" }
+		default { "0.5" }
 	}
 	parm {
 		name "buoyancy_strength"
@@ -69,27 +62,6 @@ const char* const SOP_HNanoSolverVerb::theDsFile = R"THEDSFILE(
 		type float
 		size 1
 		default { "23.0" }
-	}
-	parm {
-		name "temperature_diffusion"
-		label "Temperature Diffusion"
-		type float
-		size 1
-		default { "0.02" }
-	}
-	parm {
-		name "fuel_diffusion"
-		label "Fuel Diffusion"
-		type float
-		size 1
-		default { "0.01" }
-	}
-	parm {
-		name "ignition_temp"
-		label "Ignition Temperature"
-		type float
-		size 1
-		default { "150.0" }
 	}
 }
 )THEDSFILE";
@@ -173,14 +145,20 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 		}
 	}
 
-	openvdb::FloatGrid::Ptr Domain = openvdb::FloatGrid::create();
+	// Assume the first vector grid is the primary one for topology/voxel size
+	const openvdb::VectorGrid::Ptr primaryVelocityGrid = feedback_vector_grids[0];
+	const float voxelSize = static_cast<float>(primaryVelocityGrid->voxelSize()[0]);  // Assuming uniform voxels
+	const float deltaTime = static_cast<float>(sopparms.getTimestep());
+
+	openvdb::FloatGrid::Ptr domainGrid = openvdb::FloatGrid::create(0.0f);
+	domainGrid->setTransform(primaryVelocityGrid->transform().copy());  // Match transform
 	{
-		ScopedTimer timer("HNanoSolver::MergeTopology");
-		Domain->topologyUnion(*feedback_vector_grids[0]);
+		ScopedTimer timer("HNanoSolver::DefineTopology");
+		domainGrid->tree().topologyUnion(primaryVelocityGrid->tree());
 	}
 
 	HNS::GridIndexedData data;
-	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(Domain, &data);
+	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(domainGrid, &data);
 	builder.setAllocType(AllocationType::Standard);
 	{
 		for (const auto& grid : feedback_float_grids) {
@@ -194,32 +172,40 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 		builder.build();
 	}
 
+	if (data.size() == 0) {
+		cookparms.sopAddWarning(SOP_MESSAGE, "No active voxels found. Simulation skipped.");
+		return;  // Nothing to simulate
+	}
 
+	// --- 4. Create NanoVDB Acceleration Structure ---
 	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle;
 	{
-		ScopedTimer timer("Building Index Grid");
-		CreateIndexGrid(data, handle, feedback_vector_grids[0]->voxelSize()[0]);
+		ScopedTimer timer("Building NanoVDB Index Grid");
+		try {
+			CreateIndexGrid(data, handle, voxelSize);
+		} catch (const std::exception& e) {
+			cookparms.sopAddError(SOP_MESSAGE, (std::string("Failed to create NanoVDB grid: ") + e.what()).c_str());
+			return;
+		}
 	}
 
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
 
 	{
-		const float deltaTime = static_cast<float>(sopparms.getTimestep());
 		const int iterations = sopparms.getIterations();
 
-		CombustionParams params;
-		params.combustionRate = sopparms.getCombustion_rate();
-		params.heatRelease = sopparms.getHeat_release();
+		CombustionParams params{};
+		params.expansionRate = sopparms.getExpansion_rate();
+		params.temperatureRelease = sopparms.getTemperature_gain();
 		params.buoyancyStrength = sopparms.getBuoyancy_strength();
 		params.ambientTemp = sopparms.getAmbient_temp();
-		params.temperatureDiffusion = sopparms.getTemperature_diffusion();
-		params.fuelDiffusion = sopparms.getFuel_diffusion();
-		params.ignitionTemp = sopparms.getIgnition_temp();
 
-		Compute_Sim(data, handle, iterations, deltaTime, feedback_vector_grids[0]->voxelSize()[0], params, stream);
+		Compute_Sim(data, handle, iterations, deltaTime, primaryVelocityGrid->voxelSize()[0], params, stream);
 	}
 
+	cudaStreamSynchronize(stream);
+	cudaStreamDestroy(stream);
 
 	{
 		for (const auto& grid : feedback_float_grids) {
