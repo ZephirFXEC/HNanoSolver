@@ -14,7 +14,7 @@
 
 void newSopOperator(OP_OperatorTable* table) {
 	table->addOperator(new OP_Operator("hnanosolver", "HNanoSolver", SOP_HNanoSolver::myConstructor, SOP_HNanoSolver::buildTemplates(), 2,
-	                                   2, nullptr, OP_FLAG_GENERATOR));
+	                                   3, nullptr, OP_FLAG_GENERATOR));
 }
 
 
@@ -29,11 +29,11 @@ const char* const SOP_HNanoSolverVerb::theDsFile = R"THEDSFILE(
         default { "1/$FPS" }
     }
 	parm {
-		name "voxelsize"
-		label "Voxel Size"
-        type    float
+		name "padding"
+		label "Voxel Padding"
+        type    integer
         size    1
-        default { "0.5" }
+        range   { 1! 100 }
 	}
 	parm {
 		name "iterations"
@@ -43,18 +43,18 @@ const char* const SOP_HNanoSolverVerb::theDsFile = R"THEDSFILE(
         range   { 1! 100 }
 	}
 	parm {
-		name "combustion_rate"
-		label "Combustion Rate"
+		name "expansion_rate"
+		label "Expansion Rate"
 		type float
 		size 1
 		default { "0.1" }
 	}
 	parm {
-		name "heat_release"
-		label "Heat Release"
+		name "temperature_gain"
+		label "Temperature Gain"
 		type float
 		size 1
-		default { "10.0" }
+		default { "0.5" }
 	}
 	parm {
 		name "buoyancy_strength"
@@ -71,25 +71,18 @@ const char* const SOP_HNanoSolverVerb::theDsFile = R"THEDSFILE(
 		default { "23.0" }
 	}
 	parm {
-		name "temperature_diffusion"
-		label "Temperature Diffusion"
+		name "vorticity"
+		label "Vorticity Scale"
 		type float
 		size 1
-		default { "0.02" }
+		default { "1" }
 	}
 	parm {
-		name "fuel_diffusion"
-		label "Fuel Diffusion"
+		name "factor_scale"
+		label "Vorticity Factor Scale"
 		type float
 		size 1
-		default { "0.01" }
-	}
-	parm {
-		name "ignition_temp"
-		label "Ignition Temperature"
-		type float
-		size 1
-		default { "150.0" }
+		default { "0.5" }
 	}
 }
 )THEDSFILE";
@@ -104,36 +97,50 @@ const SOP_NodeVerb::Register<SOP_HNanoSolverVerb> SOP_HNanoSolverVerb::theVerb;
 const SOP_NodeVerb* SOP_HNanoSolver::cookVerb() const { return SOP_HNanoSolverVerb::theVerb.get(); }
 
 void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
-	/*
-	 * 1. Merge Input Grids for sourcing
-	 * 2. Advect Vel Field
-	 * 3. Combustion
-	 * 4. Pressure Projection
-	 * 5. Advection of Density / Temperature / Fuel ...
-	 */
-
-
 	const auto& sopparms = cookparms.parms<SOP_HNanoSolverParms>();
 	const auto sopcache = dynamic_cast<SOP_HNanoSolverCache*>(cookparms.cache());
-
 
 	openvdb_houdini::HoudiniInterrupter boss("Computing VDB grids");
 
 	GU_Detail* detail = cookparms.gdh().gdpNC();
 	const GU_Detail* feedback_input = cookparms.inputGeo(0);
 	const GU_Detail* source_input = cookparms.inputGeo(1);
+	const GU_Detail* collision_input = cookparms.inputGeo(2);
 
 	std::vector<openvdb::GridBase::Ptr> feedback_grids;
-	std::vector<openvdb::GridBase::Ptr> source_grids;  // Velocity grid ( len = 1 )
+	std::vector<openvdb::GridBase::Ptr> source_grids;     // Velocity grid ( len = 1 )
+	std::vector<openvdb::GridBase::Ptr> collision_grids;  // SDF grid for collisions
 
 	if (auto err = loadGrid(feedback_input, feedback_grids); err != UT_ERROR_NONE) {
-		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load density grid");
+		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load feedback grid");
 		return;
 	}
 
 	if (auto err = loadGrid(source_input, source_grids); err != UT_ERROR_NONE && err != UT_ERROR_ABORT) {
-		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load density grid");
+		err = cookparms.sopAddError(SOP_MESSAGE, "Failed to load source grid");
 		return;
+	}
+
+	// Load collision SDF grid
+	openvdb::FloatGrid::Ptr sdf_grid;
+	bool has_collision = false;
+	if (collision_input) {
+		if (auto err = loadGrid(collision_input, collision_grids); err != UT_ERROR_NONE && err != UT_ERROR_ABORT) {
+			cookparms.sopAddWarning(SOP_MESSAGE, "Failed to load collision grid, continuing without collision");
+		} else if (!collision_grids.empty()) {
+			// Find the first float grid to use as SDF
+			for (const auto& grid : collision_grids) {
+				if (auto float_grid = openvdb::gridPtrCast<openvdb::FloatGrid>(grid)) {
+					sdf_grid = float_grid;
+					has_collision = true;
+					break;
+				}
+			}
+
+			if (!has_collision) {
+				cookparms.sopAddWarning(SOP_MESSAGE, "No valid SDF grid found in collision input, continuing without collision");
+			}
+		}
 	}
 
 	std::vector<openvdb::FloatGrid::Ptr> feedback_float_grids;
@@ -173,14 +180,26 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 		}
 	}
 
-	openvdb::FloatGrid::Ptr Domain = openvdb::FloatGrid::create();
+	// Assume the first vector grid is the primary one for topology/voxel size
+	const openvdb::VectorGrid::Ptr primaryVelocityGrid = feedback_vector_grids[0];
+	const float voxelSize = static_cast<float>(primaryVelocityGrid->voxelSize()[0]);  // Assuming uniform voxels
+	const float deltaTime = static_cast<float>(sopparms.getTimestep());
+
+	openvdb::MaskGrid::Ptr domainGrid = openvdb::MaskGrid::create();
 	{
-		ScopedTimer timer("HNanoSolver::MergeTopology");
-		Domain->topologyUnion(*feedback_vector_grids[0]);
+		ScopedTimer timer("HNanoSolver::DefineTopology");
+		domainGrid->tree().topologyUnion(primaryVelocityGrid->tree());
+
+		openvdb::tools::morphology::Morphology<openvdb::MaskTree> morph(domainGrid->tree());
+		morph.dilateVoxels(sopparms.getPadding(), openvdb::tools::NN_FACE_EDGE_VERTEX, openvdb::tools::IGNORE_TILES);
+
+		if (has_collision && sdf_grid) {
+			domainGrid->tree().topologyUnion(sdf_grid->tree());
+		}
 	}
 
 	HNS::GridIndexedData data;
-	HNS::IndexGridBuilder<openvdb::FloatGrid> builder(Domain, &data);
+	HNS::IndexGridBuilder<openvdb::MaskGrid> builder(domainGrid, &data);
 	builder.setAllocType(AllocationType::Standard);
 	{
 		for (const auto& grid : feedback_float_grids) {
@@ -191,35 +210,50 @@ void SOP_HNanoSolverVerb::cook(const CookParms& cookparms) const {
 			builder.addGrid(grid, grid->getName());
 		}
 
+		// Add SDF grid if available
+		if (has_collision && sdf_grid) {
+			builder.addGridSDF(sdf_grid, "collision_sdf");
+		}
+
 		builder.build();
 	}
 
+	if (data.size() == 0) {
+		cookparms.sopAddWarning(SOP_MESSAGE, "No active voxels found. Simulation skipped.");
+		return;  // Nothing to simulate
+	}
 
+	// --- 4. Create NanoVDB Acceleration Structure ---
 	nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer> handle;
 	{
-		ScopedTimer timer("Building Index Grid");
-		CreateIndexGrid(data, handle, feedback_vector_grids[0]->voxelSize()[0]);
+		ScopedTimer timer("Building NanoVDB Index Grid");
+		try {
+			CreateIndexGrid(data, handle, voxelSize);
+		} catch (const std::exception& e) {
+			cookparms.sopAddError(SOP_MESSAGE, (std::string("Failed to create NanoVDB grid: ") + e.what()).c_str());
+			return;
+		}
 	}
 
 	cudaStream_t stream;
 	cudaStreamCreate(&stream);
 
 	{
-		const float deltaTime = static_cast<float>(sopparms.getTimestep());
 		const int iterations = sopparms.getIterations();
 
-		CombustionParams params;
-		params.combustionRate = sopparms.getCombustion_rate();
-		params.heatRelease = sopparms.getHeat_release();
+		CombustionParams params{};
+		params.expansionRate = sopparms.getExpansion_rate();
+		params.temperatureRelease = sopparms.getTemperature_gain();
 		params.buoyancyStrength = sopparms.getBuoyancy_strength();
 		params.ambientTemp = sopparms.getAmbient_temp();
-		params.temperatureDiffusion = sopparms.getTemperature_diffusion();
-		params.fuelDiffusion = sopparms.getFuel_diffusion();
-		params.ignitionTemp = sopparms.getIgnition_temp();
+		params.vorticityScale = sopparms.getVorticity();
+		params.factorScale = sopparms.getFactor_scale();
 
-		Compute_Sim(data, handle, iterations, deltaTime, feedback_vector_grids[0]->voxelSize()[0], params, stream);
+		Compute_Sim(data, handle, iterations, deltaTime, primaryVelocityGrid->voxelSize()[0], params, has_collision, stream);
 	}
 
+	cudaStreamSynchronize(stream);
+	cudaStreamDestroy(stream);
 
 	{
 		for (const auto& grid : feedback_float_grids) {

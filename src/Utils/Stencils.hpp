@@ -50,14 +50,15 @@ class IndexSampler;
 
 template <>
 class IndexOffsetSampler<0> {
-	using AccessorT = nanovdb::ChannelAccessor<float, nanovdb::ValueOnIndex>;
+	using AccessorT = nanovdb::ReadAccessor<nanovdb::ValueOnIndex, 0, 1, 2>;
+
 
    public:
 	__hostdev__ explicit IndexOffsetSampler(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* grid) : mAcc(*grid) {}
 
-	__hostdev__ __forceinline__ uint64_t offset(const int i, const int j, const int k) const { return mAcc.idx(i, j, k) - 1; }
+	__hostdev__ __forceinline__ uint64_t offset(const int i, const int j, const int k) const { return mAcc.getValue(i, j, k); }
 
-	__hostdev__ __forceinline__ uint64_t offset(const nanovdb::Coord& ijk) const { return mAcc.getIndex(ijk) - 1; }
+	__hostdev__ __forceinline__ uint64_t offset(const nanovdb::Coord& ijk) const { return mAcc.getValue(ijk); }
 
 	__hostdev__ __forceinline__ bool isActive(const int i, const int j, const int k) const {
 		return mAcc.isActive(nanovdb::Coord(i, j, k));
@@ -78,11 +79,13 @@ class IndexSampler<ValueT, 0> {
 
 
 	__hostdev__ __forceinline__ ValueT operator()(const nanovdb::Coord& ijk) const {
-		return mOffsetSampler.isActive(ijk) ? mData[mOffsetSampler.offset(ijk)] : ValueT(0);
+		const auto off = mOffsetSampler.offset(ijk);
+		return off == 0 ? ValueT(0) : mData[off - 1];
 	}
 
 	__hostdev__ __forceinline__ ValueT operator()(const int i, const int j, const int k) const {
-		return mOffsetSampler.isActive(i, j, k) ? mData[mOffsetSampler.offset(i, j, k)] : ValueT(0);
+		const auto off = mOffsetSampler.offset(i, j, k);
+		return off == 0 ? ValueT(0) : mData[off - 1];
 	}
 
 	const IndexOffsetSampler<0>& mOffsetSampler;
@@ -113,25 +116,40 @@ class TrilinearSampler {
 	// Changed sample from static to non-static so that it can call the stencil member function.
 	template <typename RealT, template <typename...> class Vec3T>
 	__hostdev__ ValueT sample(const Vec3T<RealT>& uvw) const {
-		// Make a copy to compute fractional parts (and preserve uvw)
 		auto tmp = uvw;
 		const nanovdb::Coord ijk = Floor(tmp);
 
 		ValueT v[2][2][2];
 		this->stencil(ijk, v);
 
+		// Original generic lerp lambda (good for general types)
+		// auto lerp_generic = [](ValueT a, ValueT b, RealT w) { return a + ValueT(w) * (b - a); };
 
-		auto lerp = [](ValueT a, ValueT b, RealT w) { return a + ValueT(w) * (b - a); };
+		// Lerp dispatch logic
+		auto lerp_dispatch = [&](const ValueT& val_a, const ValueT& val_b, RealT weight) -> ValueT {
+			if constexpr (std::is_same_v<ValueT, nanovdb::Vec3f> && std::is_same_v<RealT, float>) {
+#if (defined(__CUDACC__) || defined(__HIP__)) && defined(__CUDA_ARCH__)
+				// Assumes nanovdb::Vec3f has operator- defined that returns Vec3f
+				nanovdb::Vec3f diff = val_b - val_a;  // val_b and val_a are const nanovdb::Vec3f&
+				return ::fmaf(weight, diff, val_a);   // Calls your top-level fmaf
+#else
+				// Host or non-Vec3f version
+				return val_a + (val_b - val_a) * weight;
+#endif
+			} else {
+				return val_a + ValueT(weight) * (val_b - val_a);
+			}
+		};
 
-		const ValueT z0 = lerp(v[0][0][0], v[0][0][1], tmp[2]);
-		const ValueT z1 = lerp(v[0][1][0], v[0][1][1], tmp[2]);
-		const ValueT z2 = lerp(v[1][0][0], v[1][0][1], tmp[2]);
-		const ValueT z3 = lerp(v[1][1][0], v[1][1][1], tmp[2]);
+		const ValueT z0 = lerp_dispatch(v[0][0][0], v[0][0][1], tmp[2]);
+		const ValueT z1 = lerp_dispatch(v[0][1][0], v[0][1][1], tmp[2]);
+		const ValueT z2 = lerp_dispatch(v[1][0][0], v[1][0][1], tmp[2]);
+		const ValueT z3 = lerp_dispatch(v[1][1][0], v[1][1][1], tmp[2]);
 
-		const ValueT y0 = lerp(z0, z1, tmp[1]);
-		const ValueT y1 = lerp(z2, z3, tmp[1]);
+		const ValueT y0 = lerp_dispatch(z0, z1, tmp[1]);
+		const ValueT y1 = lerp_dispatch(z2, z3, tmp[1]);
 
-		return lerp(y0, y1, tmp[0]);
+		return lerp_dispatch(y0, y1, tmp[0]);
 	}
 
    private:
@@ -146,19 +164,10 @@ class IndexSampler<ValueT, 1> : public TrilinearSampler<ValueT> {
    public:
 	__hostdev__ explicit IndexSampler(const IndexOffsetSampler<0>& offsetSampler, const ValueT* data) : BaseT(offsetSampler, data) {}
 
-	__hostdev__ bool isDataActive(const nanovdb::Coord& ijk) const { return BaseT::Acc().mOffsetSampler.isActive(ijk); }
-
 	template <typename RealT, template <typename...> class Vec3T>
 	__hostdev__ ValueT operator()(const Vec3T<RealT>& xyz) const {
 		return BaseT::sample(xyz);
 	}
 
-	__hostdev__ ValueT operator()(const nanovdb::Coord& ijk) const {
-		// Avoid unnecessary memory access if not active
-		if (!isDataActive(ijk)) {
-			return ValueT(0);
-		}
-
-		return BaseT::Acc()(ijk);
-	}
+	__hostdev__ ValueT operator()(const nanovdb::Coord& ijk) const { return BaseT::Acc()(ijk); }
 };
