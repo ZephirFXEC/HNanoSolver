@@ -7,7 +7,7 @@
 #include "nanovdb/tools/cuda/PointsToGrid.cuh"
 
 void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, const int iteration,
-             const float dt, const float voxelSize, const CombustionParams& params, const cudaStream_t& stream) {
+             const float dt, const float voxelSize, const CombustionParams& params, const bool hasCollision, const cudaStream_t& stream) {
 	// --- Input Validation ---
 	if (voxelSize <= 0.0f) {
 		throw std::invalid_argument("voxelSize must be positive.");
@@ -62,6 +62,18 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 		throw std::runtime_error("No float blocks found in input data.");
 	}
 
+	// Get collision SDF if available
+	float* h_collisionSDF = nullptr;
+	bool hasCollisionData = false;
+	if (hasCollision) {
+		if (std::find(floatBlockNames.begin(), floatBlockNames.end(), "collision_sdf") != floatBlockNames.end()) {
+			h_collisionSDF = data.pValues<float>("collision_sdf");
+			if (h_collisionSDF) {
+				hasCollisionData = true;
+			}
+		}
+	}
+
 	std::vector<float*> h_floatPointers(floatBlockNames.size());
 	for (size_t i = 0; i < floatBlockNames.size(); ++i) {
 		h_floatPointers[i] = data.pValues<float>(floatBlockNames[i]);
@@ -77,6 +89,12 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 	DeviceMemory<nanovdb::Coord> d_coords(totalVoxels, stream);
 	DeviceMemory<float> d_divergence(totalVoxels, stream);
 	DeviceMemory<float> d_pressure(totalVoxels, stream);
+
+	// Allocate memory for SDF collision if available
+	DeviceMemory<float> d_collisionSDF;
+	if (hasCollisionData) {
+		d_collisionSDF = DeviceMemory<float>(totalVoxels, stream);
+	}
 
 	std::unordered_map<std::string, DeviceMemory<float>> d_inputs;
 	std::unordered_map<std::string, DeviceMemory<float>> d_outputs;
@@ -102,6 +120,11 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 	CUDA_CHECK(cudaMemcpyAsync(d_velocity.get(), h_velocity, d_velocity.bytes(), cudaMemcpyHostToDevice, stream));
 	CUDA_CHECK(cudaMemcpyAsync(d_coords.get(), h_coords, d_coords.bytes(), cudaMemcpyHostToDevice, stream));
 
+	// Copy collision SDF if available
+	if (hasCollisionData) {
+		CUDA_CHECK(cudaMemcpyAsync(d_collisionSDF.get(), h_collisionSDF, d_collisionSDF.bytes(), cudaMemcpyHostToDevice, stream));
+	}
+
 	for (size_t i = 0; i < floatBlockNames.size(); ++i) {
 		const std::string& name = floatBlockNames[i];
 		float* h_ptr = h_floatPointers[i];
@@ -118,11 +141,20 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 	// For the current non-opt kernels, 256 is usually safe.
 	int maxThreadsPerBlock = 0;
 	maxThreadsPerBlock = 1024;  // Assume a reasonable default if not querying
+	dim3 leafDim(8, 8, 8);
+	uint32_t leafNum = totalVoxels / 512;
 
 	const int blockSize = std::min((int)totalVoxels, std::min(PREFERRED_BLOCK_SIZE, maxThreadsPerBlock));
 	const int gridSize = (totalVoxels + blockSize - 1) / blockSize;
 
 	// --- 5. Simulation Pipeline Kernels ---
+
+	// If collision is enabled, enforce initial collision boundaries
+	if (hasCollisionData) {
+		enforceCollisionBoundaries<<<gridSize, blockSize, 0, stream>>>(gpuGridPtr, d_coords.get(), d_velocity.get(), d_collisionSDF.get(),
+		                                                               voxelSize, totalVoxels);
+		CUDA_CHECK(cudaGetLastError());
+	}
 
 	// Step 1: Advect velocity field
 	// Input: d_velocity (current state), d_coords
@@ -132,14 +164,15 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 		advect_vector<<<gridSize, blockSize, 0, stream>>>(gpuGridPtr, d_coords.get(),
 		                                                  d_velocity.get(),     // Velocity field to advect (and sample from)
 		                                                  d_advectedVel.get(),  // Output buffer for advected result
-		                                                  totalVoxels, dt, inv_voxelSize);
+		                                                  hasCollisionData ? d_collisionSDF.get() : nullptr, hasCollisionData, totalVoxels,
+		                                                  dt, inv_voxelSize);
 		CUDA_CHECK(cudaGetLastError());  // Check for kernel launch errors
 	}
 
 	{
 		ScopedTimerGPU timer("HNanoSolver::VorticityConfinement", 12 * 43, totalVoxels);
 		vorticityConfinement<<<gridSize, blockSize, 0, stream>>>(gpuGridPtr, d_coords.get(), d_advectedVel.get(), d_advectedVel.get(), dt,
-		                                                         inv_voxelSize, params.vortictyScale, totalVoxels);
+		                                                         inv_voxelSize, params.vorticityScale, params.factorScale, totalVoxels);
 	}
 
 	// Step 2: Calculate velocity field divergence
@@ -250,32 +283,77 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 		                                                             d_advectedVel.get(),  // Input velocity field to correct (u*)
 		                                                             d_pressure.get(),     // Pressure field
 		                                                             d_velocity.get(),     // Output projected velocity (u_n+1)
+		                                                             hasCollisionData ? d_collisionSDF.get() : nullptr, hasCollisionData,
 		                                                             inv_voxelSize);
 		CUDA_CHECK(cudaGetLastError());
 	}
 
+	// Apply collision boundaries again after projection
+	if (hasCollisionData) {
+		enforceCollisionBoundaries<<<gridSize, blockSize, 0, stream>>>(gpuGridPtr, d_coords.get(), d_velocity.get(), d_collisionSDF.get(),
+		                                                               voxelSize, totalVoxels);
+		CUDA_CHECK(cudaGetLastError());
+	}
 
 	// Step 6: Advect all scalar fields
 	// Input: d_velocity (final projected velocity), d_inputs (state including post-combustion), d_coords
 	// Output: d_outputs
+	/*
 	{
-		ScopedTimerGPU timer("HNanoSolver::Advect::Scalar", 12 * 2 + 12 + 4 * 10, totalVoxels);
-		for (const auto& name : floatBlockNames) {
-			// Ensure input/output buffers exist (should always do after setup/swap)
-			if (d_inputs.find(name) == d_inputs.end() || d_outputs.find(name) == d_outputs.end()) {
-				// This should ideally not happen if setup/swap logic is correct
-				throw std::logic_error("Internal error: Missing input/output buffer for scalar advection: " + name);
-			}
+	    ScopedTimerGPU timer("HNanoSolver::Advect::Scalar", 12 * 2 + 12 + 4 * 10, totalVoxels);
+	    for (const auto& name : floatBlockNames) {
+	        // Ensure input/output buffers exist (should always do after setup/swap)
+	        if (d_inputs.find(name) == d_inputs.end() || d_outputs.find(name) == d_outputs.end()) {
+	            // This should ideally not happen if setup/swap logic is correct
+	            throw std::logic_error("Internal error: Missing input/output buffer for scalar advection: " + name);
+	        }
 
-			advect_scalar<<<gridSize, blockSize, 0, stream>>>(gpuGridPtr, d_coords.get(),
-			                                                  d_velocity.get(),          // Advect using the final projected velocity
-			                                                  d_inputs.at(name).get(),   // Scalar field state before advection
-			                                                  d_outputs.at(name).get(),  // Write advected result here
-			                                                  totalVoxels, dt, inv_voxelSize);
+	        advect_scalar<<<gridSize, blockSize, 0, stream>>>(gpuGridPtr, d_coords.get(),
+	                                                          d_velocity.get(),          // Advect using the final projected velocity
+	                                                          d_inputs.at(name).get(),   // Scalar field state before advection
+	                                                          d_outputs.at(name).get(),  // Write advected result here
+	                                                          hasCollisionData ? d_collisionSDF.get() : nullptr, hasCollisionData,
+	                                                          totalVoxels, dt, inv_voxelSize);
+	    }
+	    CUDA_CHECK(cudaGetLastError());  // Check each kernel launch
+	}
+	*/
+	{
+		std::vector<float*> d_inDataArrays;
+		std::vector<float*> d_outDataArrays;
+
+		// Populate arrays from your maps
+		for (const auto& name : floatBlockNames) {
+			if (name == "collision_sdf") continue;
+			d_inDataArrays.push_back(d_inputs.at(name).get());
+			d_outDataArrays.push_back(d_outputs.at(name).get());
 		}
+
+		// Allocate device-side array pointers
+		float** d_inDataArraysDev;
+		float** d_outDataArraysDev;
+
+		cudaMalloc(&d_inDataArraysDev, d_inDataArrays.size() * sizeof(float*));
+		cudaMalloc(&d_outDataArraysDev, d_outDataArrays.size() * sizeof(float*));
+
+		cudaMemcpyAsync(d_inDataArraysDev, d_inDataArrays.data(), d_inDataArrays.size() * sizeof(float*), cudaMemcpyHostToDevice, stream);
+		cudaMemcpyAsync(d_outDataArraysDev, d_outDataArrays.data(), d_outDataArrays.size() * sizeof(float*), cudaMemcpyHostToDevice,
+		                stream);
+
+		ScopedTimerGPU timer("HNanoSolver::Advect::Scalar", 12 * 2 + 12 + 4 * 10, totalVoxels);
+
+		// Launch the single kernel pass
+		advect_scalars<<<gridSize, blockSize, 0, stream>>>(
+		    gpuGridPtr, d_coords.get(), d_velocity.get(), d_inDataArraysDev, d_outDataArraysDev, static_cast<int>(d_inDataArrays.size()),
+		    hasCollisionData ? d_collisionSDF.get() : nullptr, hasCollisionData, totalVoxels, dt, inv_voxelSize);
+
+		// Free temporary arrays
+		cudaFree(d_inDataArraysDev);
+		cudaFree(d_outDataArraysDev);
+
+
 		CUDA_CHECK(cudaGetLastError());  // Check each kernel launch
 	}
-
 
 	// --- 6. Copy Results back from Device to Host ---
 
@@ -313,8 +391,8 @@ extern "C" void CreateIndexGrid(HNS::GridIndexedData& data, nanovdb::GridHandle<
 
 
 extern "C" void Compute_Sim(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, int iteration,
-                            float dt, float voxelSize, const CombustionParams& params, const cudaStream_t& stream) {
-	Compute(data, handle, iteration, dt, voxelSize, params, stream);
+                            float dt, float voxelSize, const CombustionParams& params, bool hasCollision, const cudaStream_t& stream) {
+	Compute(data, handle, iteration, dt, voxelSize, params, hasCollision, stream);
 }
 
 

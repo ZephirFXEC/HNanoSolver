@@ -23,7 +23,8 @@ struct CombustionParams {
 	float temperatureRelease;
 	float buoyancyStrength;
 	float ambientTemp;
-	float vortictyScale;
+	float vorticityScale;
+	float factorScale;
 };
 
 class SOP_HNanoSolver final : public SOP_Node {
@@ -81,4 +82,4 @@ class SOP_HNanoSolverVerb final : public SOP_NodeVerb {
 extern "C" void CreateIndexGrid(HNS::GridIndexedData& data, nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, float voxelSize);
 
 extern "C" void Compute_Sim(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda::DeviceBuffer>& handle, int iteration,
-                            float dt, float voxelSize, const CombustionParams& params, const cudaStream_t& stream);
+                            float dt, float voxelSize, const CombustionParams& params, bool hasCollision, const cudaStream_t& stream);

@@ -239,7 +239,7 @@ inline __device__ float computeVorticityMag(const IndexSampler<nanovdb::Vec3f, 0
 	const float omega_y = ((u_pZ[0] - u_mZ[0]) - (u_pX[2] - u_mX[2])) * factor;
 	const float omega_z = ((u_pX[1] - u_mX[1]) - (u_pY[0] - u_mY[0])) * factor;
 
-	return sqrtf(omega_x * omega_x + omega_y * omega_y + omega_z * omega_z);
+	return __fsqrt_rn(omega_x * omega_x + omega_y * omega_y + omega_z * omega_z);
 }
 
 

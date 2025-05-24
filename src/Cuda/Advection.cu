@@ -86,8 +86,8 @@ void advect_index_grid(HNS::GridIndexedData& data, const float dt, const float v
 		ScopedTimerGPU timer("HNanoSolver::Advect::Scalar", 8 + 12 + 4 + 4, totalVoxels);
 
 		for (size_t i = 0; i < floatBlocks.size(); ++i) {
-			advect_scalar<<<gridSize, blockSize, 0, streams[i]>>>(gpuGrid, d_coords, d_velocity, d_inputs[i], d_outputs[i], totalVoxels, dt,
-			                                                      inv_voxelSize);
+			advect_scalar<<<gridSize, blockSize, 0, streams[i]>>>(gpuGrid, d_coords, d_velocity, d_inputs[i], d_outputs[i], nullptr, false,
+			                                                      totalVoxels, dt, inv_voxelSize);
 		}
 	}
 
@@ -150,7 +150,8 @@ void advect_index_grid_v(HNS::GridIndexedData& data, const float dt, const float
 
 	{
 		ScopedTimerGPU timer("HNanoSolver::Advect::Velocity", 8 + 12 + 12, totalVoxels);
-		advect_vector<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_outVel, totalVoxels, dt, inv_voxelSize);
+		advect_vector<<<gridSize, blockSize, 0, stream>>>(gpuGrid, d_coords, d_velocity, d_outVel, nullptr, false, totalVoxels, dt,
+		                                                  inv_voxelSize);
 	}
 
 	// Make sure kernel is finished before copying back
