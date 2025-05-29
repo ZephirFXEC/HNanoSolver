@@ -69,7 +69,7 @@ __device__ nanovdb::Vec3f applyNoSlipBoundary(const nanovdb::Vec3f& velocity, co
 	const nanovdb::Vec3f v_tangent = velocity - v_normal;
 
 	// For strict no-slip, even the tangential component should be zero at the boundary
-	// We'll return zero velocity (completely stopped by obstacle)
+	// We'll return zero velocity (completely stopped by an obstacle)
 	return v_tangent;  // nanovdb::Vec3f(0.0f);
 }
 
@@ -147,128 +147,121 @@ __global__ void advect_scalars(const nanovdb::NanoGrid<nanovdb::ValueOnIndex>* _
 		}
 	}
 
-	// Precompute interpolation data for backPos
-	struct InterpData {
+	// Collision handling for backtracing (branchless where possible)
+	bool inCollision = false;
+	if (hasCollision && collisionSDF) {
+		inCollision = isInCollision(collisionSDF, backPos, sdfSampler, 0.0f);
+		backPos = inCollision ? posCell : backPos;
+	}
+
+	// Optimized interpolation setup - single function for both positions
+	struct OptimizedInterpData {
 		uint64_t indices[8];
 		float weights[8];
 	};
-	InterpData backPosData;
-	{
-		const float x = backPos[0], y = backPos[1], z = backPos[2];
-		const int i0 = floor(x), i1 = i0 + 1;
-		const int j0 = floor(y), j1 = j0 + 1;
-		const int k0 = floor(z), k1 = k0 + 1;
+
+	auto setupInterpolation = [&](const nanovdb::Vec3f& pos) -> OptimizedInterpData {
+		const float x = pos[0], y = pos[1], z = pos[2];
+		const int i0 = __float2int_rd(x), i1 = i0 + 1;
+		const int j0 = __float2int_rd(y), j1 = j0 + 1;
+		const int k0 = __float2int_rd(z), k1 = k0 + 1;
+
 		const float tx = x - i0, ty = y - j0, tz = z - k0;
-		const float w000 = (1 - tx) * (1 - ty) * (1 - tz), w100 = tx * (1 - ty) * (1 - tz);
-		const float w010 = (1 - tx) * ty * (1 - tz), w110 = tx * ty * (1 - tz);
-		const float w001 = (1 - tx) * (1 - ty) * tz, w101 = tx * (1 - ty) * tz;
-		const float w011 = (1 - tx) * ty * tz, w111 = tx * ty * tz;
+		const float itx = 1.0f - tx, ity = 1.0f - ty, itz = 1.0f - tz;
 
-		uint64_t indices[8] = {s_idxSampler.offset(nanovdb::Coord(i0, j0, k0)), s_idxSampler.offset(nanovdb::Coord(i1, j0, k0)),
-		                       s_idxSampler.offset(nanovdb::Coord(i0, j1, k0)), s_idxSampler.offset(nanovdb::Coord(i1, j1, k0)),
-		                       s_idxSampler.offset(nanovdb::Coord(i0, j0, k1)), s_idxSampler.offset(nanovdb::Coord(i1, j0, k1)),
-		                       s_idxSampler.offset(nanovdb::Coord(i0, j1, k1)), s_idxSampler.offset(nanovdb::Coord(i1, j1, k1))};
+		// Precompute weight products
+		const float w00 = itx * ity, w10 = tx * ity, w01 = itx * ty, w11 = tx * ty;
 
-		for (int j = 0; j < 8; ++j) {
-			indices[j] = indices[j] == 0 ? 0 : indices[j] - 1;
+		OptimizedInterpData data{};
+		data.weights[0] = w00 * itz;  // w000
+		data.weights[1] = w10 * itz;  // w100
+		data.weights[2] = w01 * itz;  // w010
+		data.weights[3] = w11 * itz;  // w110
+		data.weights[4] = w00 * tz;   // w001
+		data.weights[5] = w10 * tz;   // w101
+		data.weights[6] = w01 * tz;   // w011
+		data.weights[7] = w11 * tz;   // w111
+
+		// Batch coordinate offset computation
+		const nanovdb::Coord c[8] = {{i0, j0, k0}, {i1, j0, k0}, {i0, j1, k0}, {i1, j1, k0},
+		                             {i0, j0, k1}, {i1, j0, k1}, {i0, j1, k1}, {i1, j1, k1}};
+
+#pragma unroll
+		for (int i = 0; i < 8; ++i) {
+			const uint64_t offset = s_idxSampler.offset(c[i]);
+			data.indices[i] = offset == 0 ? 0 : offset - 1;
 		}
 
-		backPosData = {{indices[0], indices[1], indices[2], indices[3], indices[4], indices[5], indices[6], indices[7]},
-		               {w000, w100, w010, w110, w001, w101, w011, w111}};
-	}
+		return data;
+	};
 
-	// Compute velF using precomputed backPosData
+	OptimizedInterpData backPosData = setupInterpolation(backPos);
+
+	// Compute velF using vectorized operations
 	nanovdb::Vec3f velF(0.0f);
 #pragma unroll
 	for (int j = 0; j < 8; ++j) {
 		const nanovdb::Vec3f v = velocityData[backPosData.indices[j]];
-		velF += v * backPosData.weights[j];
+		velF = velF + v * backPosData.weights[j];
 	}
 
 	nanovdb::Vec3f fwdPos2 = backPos + velF * scaled_dt;
 
-	// Check for collision in the forward trace as well
+	// Collision check for forward trace
 	if (hasCollision && collisionSDF) {
-		if (isInCollision(collisionSDF, fwdPos2, sdfSampler, 0.0f)) {
-			fwdPos2 = backPos;
-		}
+		bool fwdInCollision = isInCollision(collisionSDF, fwdPos2, sdfSampler, 0.0f);
+		fwdPos2 = fwdInCollision ? backPos : fwdPos2;
 	}
 
-	// Precompute interpolation data for fwdPos2
-	InterpData fwdPos2Data;
-	{
-		const float x = fwdPos2[0], y = fwdPos2[1], z = fwdPos2[2];
-		const int i0 = floor(x), i1 = i0 + 1;
-		const int j0 = floor(y), j1 = j0 + 1;
-		const int k0 = floor(z), k1 = k0 + 1;
-		const float tx = x - i0, ty = y - j0, tz = z - k0;
-		const float w000 = (1 - tx) * (1 - ty) * (1 - tz), w100 = tx * (1 - ty) * (1 - tz);
-		const float w010 = (1 - tx) * ty * (1 - tz), w110 = tx * ty * (1 - tz);
-		const float w001 = (1 - tx) * (1 - ty) * tz, w101 = tx * (1 - ty) * tz;
-		const float w011 = (1 - tx) * ty * tz, w111 = tx * ty * tz;
+	OptimizedInterpData fwdPos2Data = setupInterpolation(fwdPos2);
 
-		uint64_t indices[8] = {s_idxSampler.offset(nanovdb::Coord(i0, j0, k0)), s_idxSampler.offset(nanovdb::Coord(i1, j0, k0)),
-		                       s_idxSampler.offset(nanovdb::Coord(i0, j1, k0)), s_idxSampler.offset(nanovdb::Coord(i1, j1, k0)),
-		                       s_idxSampler.offset(nanovdb::Coord(i0, j0, k1)), s_idxSampler.offset(nanovdb::Coord(i1, j0, k1)),
-		                       s_idxSampler.offset(nanovdb::Coord(i0, j1, k1)), s_idxSampler.offset(nanovdb::Coord(i1, j1, k1))};
+	// Precompute neighbor indices with reduced branching
+	static __device__ const int3 offs[6] = {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
 
-		for (int j = 0; j < 8; ++j) {
-			indices[j] = indices[j] == 0 ? 0 : indices[j] - 1;
-		}
-
-		fwdPos2Data = {{indices[0], indices[1], indices[2], indices[3], indices[4], indices[5], indices[6], indices[7]},
-		               {w000, w100, w010, w110, w001, w101, w011, w111}};
-	}
-
-	// Precompute neighbor indices for clamp step
-	static __device__ const int offs[6][3] = {{-1, 0, 0}, {+1, 0, 0}, {0, -1, 0}, {0, +1, 0}, {0, 0, -1}, {0, 0, +1}};
 	uint32_t nbrIdx[6];
 #pragma unroll
 	for (int n = 0; n < 6; ++n) {
-		nbrIdx[n] = s_idxSampler.offset(coord[0] + offs[n][0], coord[1] + offs[n][1], coord[2] + offs[n][2]);
-	}
-#pragma unroll
-	for (int n = 0; n < 6; ++n) {
-		nbrIdx[n] = nbrIdx[n] == 0 ? 0 : nbrIdx[n] - 1;
+		uint32_t offset = s_idxSampler.offset(coord[0] + offs[n].x, coord[1] + offs[n].y, coord[2] + offs[n].z);
+		nbrIdx[n] = offset == 0 ? 0 : offset - 1;
 	}
 
-	// Process each scalar
+	// Process each scalar with optimized memory access
 	for (int s = 0; s < numScalars; ++s) {
 		const float* __restrict__ inData = inDataArrays[s];
 		float* __restrict__ outData = outDataArrays[s];
 
 		const float phiOrig = inData[origIndex];
 
-		// Compute phiForward with unrolled interpolation
-		float phiForward =
-		    inData[backPosData.indices[0]] * backPosData.weights[0] + inData[backPosData.indices[1]] * backPosData.weights[1] +
-		    inData[backPosData.indices[2]] * backPosData.weights[2] + inData[backPosData.indices[3]] * backPosData.weights[3] +
-		    inData[backPosData.indices[4]] * backPosData.weights[4] + inData[backPosData.indices[5]] * backPosData.weights[5] +
-		    inData[backPosData.indices[6]] * backPosData.weights[6] + inData[backPosData.indices[7]] * backPosData.weights[7];
+		// Vectorized interpolation using fused multiply-add
+		float phiForward = 0.0f;
+		float phiBackward = 0.0f;
 
-		// Compute phiBackward with unrolled interpolation
-		float phiBackward =
-		    inData[fwdPos2Data.indices[0]] * fwdPos2Data.weights[0] + inData[fwdPos2Data.indices[1]] * fwdPos2Data.weights[1] +
-		    inData[fwdPos2Data.indices[2]] * fwdPos2Data.weights[2] + inData[fwdPos2Data.indices[3]] * fwdPos2Data.weights[3] +
-		    inData[fwdPos2Data.indices[4]] * fwdPos2Data.weights[4] + inData[fwdPos2Data.indices[5]] * fwdPos2Data.weights[5] +
-		    inData[fwdPos2Data.indices[6]] * fwdPos2Data.weights[6] + inData[fwdPos2Data.indices[7]] * fwdPos2Data.weights[7];
+#pragma unroll
+		for (int j = 0; j < 8; ++j) {
+			phiForward = __fmaf_rn(inData[backPosData.indices[j]], backPosData.weights[j], phiForward);
+			phiBackward = __fmaf_rn(inData[fwdPos2Data.indices[j]], fwdPos2Data.weights[j], phiBackward);
+		}
 
-		// Correction step
+		// BFECC correction step
 		const float error = phiOrig - phiBackward;
-		float phiCorr = phiForward + 0.5f * error;
+		float phiCorr = __fmaf_rn(0.5f, error, phiForward);
 
-		// Clamp step
-		float minVal = phiOrig, maxVal = phiOrig;
-		for (int neighborIndice : nbrIdx) {
-			const float val = inData[neighborIndice];
+		// Optimized min/max computation for clamping
+		float minVal = phiOrig;
+		float maxVal = phiOrig;
+
+#pragma unroll
+		for (int n = 0; n < 6; ++n) {
+			const float val = inData[nbrIdx[n]];
 			minVal = fminf(minVal, val);
 			maxVal = fmaxf(maxVal, val);
 		}
+
 		minVal = fminf(minVal, phiForward);
 		maxVal = fmaxf(maxVal, phiForward);
-		phiCorr = fmaxf(minVal, fminf(phiCorr, maxVal));
 
-		outData[idx] = phiCorr;
+		// Final clamping
+		outData[idx] = fmaxf(minVal, fminf(phiCorr, maxVal));
 	}
 }
 

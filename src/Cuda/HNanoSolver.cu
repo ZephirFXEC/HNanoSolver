@@ -182,7 +182,7 @@ void Compute(HNS::GridIndexedData& data, const nanovdb::GridHandle<nanovdb::cuda
 		ScopedTimerGPU timer("HNanoSolver::Divergence", 12 + 12 * 6 + 4, totalVoxels);
 		// Using the non-optimized divergence kernel as in the original code
 		divergence<<<gridSize, blockSize, 0, stream>>>(gpuGridPtr, d_coords.get(),
-		                                               d_velocity.get(),  // Use original velocity for divergence calc
+		                                               d_advectedVel.get(),
 		                                               d_divergence.get(), inv_voxelSize, totalVoxels);
 		CUDA_CHECK(cudaGetLastError());
 	}
