@@ -9,12 +9,17 @@
 #include <malloc.h>
 #define _aligned_malloc(size, alignment) memalign(alignment, size)
 #define _aligned_free free
-#elif _WIN32
+#elif defined(_WIN32)
 #include <malloc.h>
-#define _aligned_malloc(size, alignment) _aligned_malloc(size, alignment)
-#define _aligned_free _aligned_free
+/* Windows provides _aligned_malloc and _aligned_free */
 #else
-
+#include <cstdlib>
+static inline void* _aligned_malloc(size_t size, size_t alignment) {
+        void* ptr = nullptr;
+        if (posix_memalign(&ptr, alignment, size) != 0) return nullptr;
+        return ptr;
+}
+static inline void _aligned_free(void* ptr) { free(ptr); }
 #endif
 
 enum class AllocationType { Standard, Aligned, CudaPinned };
