@@ -6,7 +6,7 @@
 #include <openvdb/Types.h>
 
 #include "Memory.hpp"
-#include "typeindex"
+#include <typeindex>
 
 namespace HNS {
 
