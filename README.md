@@ -41,11 +41,13 @@ It will generate Visual Studio solutions files that you can use to Compile & Run
 - Williams and Others, fVDB: A Deep-Learning Framework for Sparse, Large-Scale, and High-Performance Spatial Intelligence, [this](https://research.nvidia.com/labs/prl/williams2024fVDB/fVDB.pdf)
 
 
-# Pictures 
-
-# HNanoViewer : 
-![image](https://github.com/user-attachments/assets/82402e68-e462-4932-83d9-3b63219403a6)
-
-
-# Still Frame : 
-![image](https://github.com/user-attachments/assets/12de0c85-87df-4b12-ab81-4973c024d9e0)
+# Cite 
+```
+@misc{Crema_2025,
+    title = {HNanoSolver: GPU Accelerated Sparse Volumetric Fluid Solver},
+    url = {https://github.com/ZephirFXEC/HNanoSolver},
+    journal = {GitHub},
+    author = {Crema, Enzo},
+    year = {2025}
+} 
+```
